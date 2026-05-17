@@ -70,19 +70,46 @@ PARKING_ALLOC = {
     'crisis':     [('GLD', 0.35),  ('GDX', 0.35),  ('SCHP', 0.30)],
 }
 
-# Use pre_market_scanner universe — same 150 symbols as live bot
-# Import here to keep backtester in sync automatically
+# Expanded backtester universe — 300+ symbols
+EXPANDED_UNIVERSE = sorted(list(set([
+    'AA','AAPL','ABBV','ABNB','ABT','ADBE','AFRM','AMAT','AMGN','AMZN',
+    'ANSS','APA','APD','APP','AR','ARM','ASHR','ASML','AVGO','AXP',
+    'BA','BABA','BAC','BIIB','BIDU','BILL','BJ','BK','BKR','BLK','BMY',
+    'BKNG','C','CACI','CAT','CBOE','CDNS','CELH','CFG','CI','CME',
+    'CMCSA','CMG','COIN','COF','COP','COST','CRWD','CRM','CSX','CVS',
+    'CVX','DASH','DDOG','DE','DG','DHR','DIA','DIS','DLTR','DKNG',
+    'DOCU','DVN','EEM','EFA','ELV','EMR','ENPH','EOG','EQT','ETSY',
+    'ETN','EWJ','EWY','EWZ','EXAS','FANG','FCX','FDX','FIS','FISV',
+    'FITB','FOUR','FSLR','FTNT','FXI','GD','GDX','GDXJ','GE','GILD',
+    'GLD','GME','GOOG','GOOGL','GPN','GS','HAL','HBAN','HD','HES',
+    'HII','HOOD','HON','HUM','HYG','IAU','IBB','IBKR','ICE','IGV',
+    'INSM','INTC','IONS','IR','ISRG','IWM','JD','JNJ','JPM','KEY',
+    'KLAC','KMX','KRE','KWEB','LABU','LCID','LDOS','LI','LIN','LLY',
+    'LMT','LOW','LQD','LRCX','LYFT','MA','MBB','MCD','MCHI','MCO',
+    'MDY','MEDP','META','MGM','MKTX','MMM','MOS','MPC','MRK','MRNA',
+    'MRVL','MS','MSFT','MSTR','MU','NDAQ','NET','NFLX','NEM','NIO',
+    'NKE','NOC','NOW','NSC','NVDA','NBIX','OKTA','ON','OPEN','ORCL',
+    'OXY','PANW','PDD','PENN','PFE','PH','PLTR','PLUG','PNC','PYPL',
+    'QCOM','QQQ','RBLX','REGN','RIVN','ROK','RTX','RXRX','RBLX',
+    'SBUX','SCHP','SCHW','SE','SHW','SLB','SLV','SMH','SMCI','SNOW',
+    'SOFI','SOXX','SPGI','SPY','SPXU','SQQQ','STT','T','TDG','TFC',
+    'TGT','TLT','TMO','TMUS','TSCO','TSLA','TSM','TWLO','T','UBER',
+    'UNG','UNH','UNP','UPS','USB','USO','UVXY','VRTX','VLO','VMC',
+    'VNQ','VTI','VTIP','VXX','V','VZ','WFC','WMT','XBI','XLB','XLC',
+    'XLE','XLF','XLI','XLK','XLP','XLRE','XLU','XLV','XLY','XOM',
+    'XPEV','YUM','ZM','ZS','AMD','HOOD','VIXY','LYFT','DIA','MDY',
+    'IWM','GDX','GDXJ','ARM','AVGO','ASML','MRVL','KLAC','LRCX',
+    'AMAT','NOW','ADBE','CRM','ORCL','SNPS','CDNS',
+])))
+
 try:
-    from pre_market_scanner import SCAN_UNIVERSE as UNIVERSE
-    print(f"  Using pre-market scanner universe: {len(UNIVERSE)} symbols")
+    from pre_market_scanner import SCAN_UNIVERSE
+    UNIVERSE = sorted(list(set(EXPANDED_UNIVERSE + SCAN_UNIVERSE)))
+    print(f"  Using expanded universe: {len(UNIVERSE)} symbols "
+          f"({len(EXPANDED_UNIVERSE)} base + {len(SCAN_UNIVERSE)} scanner)")
 except ImportError:
-    UNIVERSE = [
-        'SPY', 'QQQ', 'IWM',
-        'XLK', 'XLF', 'XLE', 'XLV', 'XLI',
-        'AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL',
-        'META', 'TSLA', 'JPM', 'GS', 'BAC',
-    ]
-    print(f"  Using fallback universe: {len(UNIVERSE)} symbols")
+    UNIVERSE = EXPANDED_UNIVERSE
+    print(f"  Using expanded universe: {len(UNIVERSE)} symbols")
 
 PARKING_TICKERS = ['GLD', 'GDX', 'SCHP', 'VTIP']
 ALL_TICKERS     = list(set(UNIVERSE + PARKING_TICKERS))
@@ -690,10 +717,8 @@ def run_backtest(client, start=None, end=None, capital=STARTING_CAPITAL, years=5
         # Check exits (trading positions only)
         portfolio.check_exits(prices, dt, regime, history, spy_hist)
 
-        # Parking disabled in backtest — proxy signals already weak enough
-        # Live bot uses real UW flow which generates much higher scores
-        # Parking results would be dominated by 2024 rate hike environment
-        # pass  # portfolio.rebalance_parking(regime, prices, dt)
+        # Parking disabled in backtest — evaluate separately (backlog item #2)
+        # portfolio.rebalance_parking(regime, prices, dt)
 
         # Score and trade (need 30 days warmup)
         open_trading = [s for s in portfolio.positions
@@ -1131,6 +1156,8 @@ def print_results(results, recs):
     print(f"  Win rate:           {s['win_rate_pct']:>10.1f}%")
     print(f"  Trading trades:     {s['total_trades']:>10}")
     print(f"  Parking P&L:        ${s['parking_pnl']:>+12,.2f}")
+
+    # Parking breakdown — skipped when parking disabled in backtest
     print(f"  Total fees:         ${s['total_fees']:>12,.2f}")
     print(f"  ── Entry breakdown ───────────────────────────────────")
     print(f"  CSP entries:        {s.get('csp_trades',0):>10}  "

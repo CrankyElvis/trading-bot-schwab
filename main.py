@@ -315,14 +315,15 @@ def run_cycle(client):
     print(f"  💵 Cash: ${portfolio['cash']:,.2f}  |  "
           f"Positions: {len(portfolio.get('positions', {}))}")
 
-    # ── Step 4: Cash parking ──────────────────────────────────────────────────
-    print("\n🏦 Evaluating cash parking...")
-    spy_hist        = get_price_history(client, 'SPY', days=30)
-    parking_tickers = ['GLD', 'SCHP', 'VTIP', 'GDX']
-    parking_quotes  = get_quotes(client, parking_tickers)
-    parking_plan    = evaluate_cash(regime_state.regime, portfolio, parking_quotes)
-    print_parking_plan(parking_plan)
-    execute_parking(client, parking_plan, portfolio)
+    # ── Step 4: Cash parking — DISABLED pending evaluation ──────────────────
+    print("\n🏦 Cash parking: DISABLED (backlog item #2 — pending evaluation)")
+    # Re-enable by uncommenting:
+    # spy_hist        = get_price_history(client, 'SPY', days=30)
+    # parking_tickers = ['GLD', 'SCHP', 'VTIP', 'GDX']
+    # parking_quotes  = get_quotes(client, parking_tickers)
+    # parking_plan    = evaluate_cash(regime_state.regime, portfolio, parking_quotes)
+    # print_parking_plan(parking_plan)
+    # execute_parking(client, parking_plan, portfolio)
     portfolio = load_portfolio()
 
     # ── Pre-market scan (6:00am) ─────────────────────────────────────────────

@@ -55,7 +55,7 @@ SCAN_UNIVERSE = [
 
     # ── Financials ─────────────────────────────────────────────────────────
     'JPM', 'GS', 'MS', 'BAC', 'WFC', 'C', 'BLK', 'SCHW',
-    'V', 'MA', 'AXP', 'COF', 'PYPL',
+    'V', 'MA', 'AXP', 'COF', 'SQ', 'PYPL',
 
     # ── Energy ─────────────────────────────────────────────────────────────
     'XOM', 'CVX', 'COP', 'EOG', 'SLB', 'OXY', 'MPC', 'VLO',
@@ -228,7 +228,7 @@ def run_scan(client) -> dict:
     price_cache = {}
     scored      = 0
 
-    for symbol in SCAN_UNIVERSE:
+    for symbol in today_universe:
         try:
             # Fetch price history (cache to avoid duplicate calls)
             if symbol not in price_cache:

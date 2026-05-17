@@ -1,60 +1,60 @@
 {
   "weight_changes": {
-    "sweep_flow": {
-      "current": 0.1,
-      "recommended": 0.268,
-      "change": 0.168,
-      "direction": "\u2b06\ufe0f",
-      "reason": "edge=+0.125  corr=+0.015"
-    },
     "dark_pool": {
       "current": 0.1,
-      "recommended": 0.145,
-      "change": 0.045,
+      "recommended": 0.147,
+      "change": 0.047,
       "direction": "\u2b06\ufe0f",
-      "reason": "edge=+0.033  corr=+0.028"
+      "reason": "edge=+0.085  corr=+0.105"
     },
     "politician": {
-      "current": 0.05,
-      "recommended": 0.018,
-      "change": -0.032,
-      "direction": "\u2b07\ufe0f",
-      "reason": "edge=+0.000  corr=+0.000"
+      "current": 0.08,
+      "recommended": 0.179,
+      "change": 0.099,
+      "direction": "\u2b06\ufe0f",
+      "reason": "edge=+0.131  corr=+0.097"
     },
     "insider": {
-      "current": 0.05,
-      "recommended": 0.018,
-      "change": -0.032,
-      "direction": "\u2b07\ufe0f",
-      "reason": "edge=+0.000  corr=+0.000"
+      "current": 0.08,
+      "recommended": 0.159,
+      "change": 0.079,
+      "direction": "\u2b06\ufe0f",
+      "reason": "edge=+0.120  corr=+0.080"
     },
     "price_rvol": {
       "current": 0.05,
-      "recommended": 0.018,
-      "change": -0.032,
-      "direction": "\u2b07\ufe0f",
-      "reason": "edge=+0.042  corr=-0.018"
+      "recommended": 0.109,
+      "change": 0.059,
+      "direction": "\u2b06\ufe0f",
+      "reason": "edge=+0.060  corr=+0.082"
     },
     "gex": {
       "current": 0.03,
-      "recommended": 0.479,
-      "change": 0.449,
+      "recommended": 0.078,
+      "change": 0.048,
       "direction": "\u2b06\ufe0f",
-      "reason": "edge=+0.181  corr=+0.051"
+      "reason": "edge=+0.061  corr=+0.038"
     },
     "market_tide": {
-      "current": 0.32,
-      "recommended": 0.018,
-      "change": -0.302,
+      "current": 0.28,
+      "recommended": 0.084,
+      "change": -0.196,
       "direction": "\u2b07\ufe0f",
-      "reason": "edge=+0.000  corr=+0.000"
+      "reason": "edge=+0.052  corr=+0.057"
     },
     "sector_tide": {
-      "current": 0.27,
-      "recommended": 0.018,
-      "change": -0.252,
+      "current": 0.23,
+      "recommended": 0.072,
+      "change": -0.158,
       "direction": "\u2b07\ufe0f",
-      "reason": "edge=+0.000  corr=+0.000"
+      "reason": "edge=+0.043  corr=+0.050"
+    },
+    "reddit_wsb": {
+      "current": 0.02,
+      "recommended": 0.055,
+      "change": 0.035,
+      "direction": "\u2b06\ufe0f",
+      "reason": "edge=+0.013  corr=+0.061"
     }
   },
   "new_data_sources": [
@@ -91,14 +91,15 @@
     }
   ],
   "regime_adjustments": [
-    "Best regime: NEUTRAL (+1154.9%). Consider MAX_CANDIDATES=5 in neutral regime.",
-    "Worst regime: VOLATILITY (-19.5%). Consider BASE_POSITION_PCT=0.15 in volatility regime."
+    "Best regime: NEUTRAL (+1572.8%). Consider MAX_CANDIDATES=5 in neutral regime.",
+    "Worst regime: VOLATILITY (-11.2%). Consider BASE_POSITION_PCT=0.15 in volatility regime."
   ],
   "exit_adjustments": [
-    "Stop losses averaging $-996. Consider tightening from 7% to 5%.",
-    "Take profits averaging $5,352. Consider raising from 15% to 20% in flow regime to let winners run."
+    "Stop losses averaging $-3,682. Consider tightening from 7% to 5%.",
+    "Take profits averaging $5,083. Consider raising from 15% to 20% in flow regime to let winners run."
   ],
   "general": [
-    "Annual return 283.0% \u2014 strategy is working. Focus on drawdown reduction next."
+    "Win rate 68.6% is strong. Consider lowering MIN_SCORE to 0.70 to capture more opportunities.",
+    "Annual return 125.1% \u2014 strategy is working. Focus on drawdown reduction next."
   ]
 }
