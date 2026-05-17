@@ -621,7 +621,7 @@ def run_cycle(client):
 
 def main():
     print("🤖 Trading bot starting up...")
-    print(f"   Cycle interval:   {CYCLE_HOURS}h")
+    print(f"   Schedule:         {len(SCHEDULE)} named cycles/day")
     print(f"   Min score:        0.75")
     print(f"   Max candidates:   {MAX_CANDIDATES}")
     print(f"   Base position:    {BASE_POSITION_PCT*100:.0f}% of idle cash")
