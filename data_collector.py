@@ -736,6 +736,105 @@ def get_reddit_sentiment(symbol: str) -> dict:
         return {'mention_count': 0, 'sentiment': 'neutral', 'score': 0.5}
 
 
+
+# ── Market Cap & Float Data ───────────────────────────────────────────────────
+
+# Market cap tier thresholds (USD)
+MCAP_TIERS = {
+    'mega':   500_000_000_000,   # > $500B
+    'large':   50_000_000_000,   # $50B - $500B
+    'mid':      5_000_000_000,   # $5B  - $50B
+    'small':            0,       # < $5B
+}
+
+# Base dark pool threshold per market cap tier
+DP_BASE_THRESHOLD = {
+    'mega':  2_000_000,   # $2M
+    'large':   500_000,   # $500k
+    'mid':     150_000,   # $150k
+    'small':    50_000,   # $50k
+}
+
+# Cached market cap/float data (refreshed daily)
+_mcap_cache: dict = {}
+
+def get_market_cap_tier(client, symbol: str) -> tuple[str, float, float]:
+    """
+    Returns (tier, market_cap, float_shares) for a symbol.
+    Uses Schwab quote data — no extra API needed.
+    Caches results for the session.
+    """
+    global _mcap_cache
+    if symbol in _mcap_cache:
+        return _mcap_cache[symbol]
+
+    try:
+        q = get_quote(client, symbol)
+        # Schwab returns totalVolume, 52wHigh, etc.
+        # Estimate market cap from last price × shares outstanding
+        # Use shortable shares as float proxy if available
+        last        = q.get('last', q.get('lastPrice', 0))
+        shares_out  = q.get('sharesOutstanding', 0)
+        float_shares = q.get('shortableShares', shares_out) or shares_out
+
+        if last <= 0 or shares_out <= 0:
+            result = ('large', 0, 0)
+            _mcap_cache[symbol] = result
+            return result
+
+        mcap = last * shares_out
+
+        if mcap >= MCAP_TIERS['mega']:
+            tier = 'mega'
+        elif mcap >= MCAP_TIERS['large']:
+            tier = 'large'
+        elif mcap >= MCAP_TIERS['mid']:
+            tier = 'mid'
+        else:
+            tier = 'small'
+
+        result = (tier, mcap, float_shares)
+        _mcap_cache[symbol] = result
+        return result
+
+    except Exception as e:
+        result = ('large', 0, 0)   # safe default
+        _mcap_cache[symbol] = result
+        return result
+
+
+def get_dp_threshold(client, symbol: str) -> float:
+    """
+    Returns float-adjusted dark pool threshold for a symbol.
+
+    Formula:
+      base = DP_BASE_THRESHOLD[market_cap_tier]
+      float_multiplier:
+        low float  (<50M shares)  → × 0.3  (even small prints matter)
+        mid float  (50-500M)      → × 1.0  (baseline)
+        high float (>500M shares) → × 2.0  (need bigger prints)
+    """
+    tier, mcap, float_shares = get_market_cap_tier(client, symbol)
+    base = DP_BASE_THRESHOLD.get(tier, 500_000)
+
+    if float_shares > 0:
+        float_m = float_shares / 1_000_000   # convert to millions
+        if float_m < 50:
+            float_mult = 0.3
+        elif float_m > 500:
+            float_mult = 2.0
+        else:
+            float_mult = 1.0
+    else:
+        float_mult = 1.0
+
+    return round(base * float_mult)
+
+
+def get_dp_thresholds_bulk(client, symbols: list) -> dict:
+    """Returns {symbol: threshold} for multiple symbols."""
+    return {s: get_dp_threshold(client, s) for s in symbols}
+
 # ── Smoke Test ────────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':

@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 
 # ── Thresholds ────────────────────────────────────────────────────────────────
 
-STOP_LOSS_PCT    = 0.07    # 7%
+STOP_LOSS_PCT    = 0.05   # tightened from 7% — stop losses averaging -$444    # 7%
 TAKE_PROFIT_PCT  = 0.15    # 15%
 MAX_HOLD_DAYS    = 5
 

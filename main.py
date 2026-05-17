@@ -251,10 +251,12 @@ def run_cycle(client):
     if weekend:
         print("\n📋 Weekend mode — building watchlist for Monday...")
         snapshot = collect_snapshot(client, DEFAULT_UNIVERSE)
+        port_val = portfolio.get('cash', 25000)
         result   = run_scoring_cycle(
             universe=DEFAULT_UNIVERSE,
             snapshot=snapshot,
             regime=regime_state.regime,
+            portfolio_value=port_val,
         )
         print_cycle_result(result)
         print("  📝 Watchlist saved — no trades executed (weekend)")
@@ -272,10 +274,12 @@ def run_cycle(client):
     if not market_open:
         print("\n🌙 After hours — pre-scoring tomorrow's universe...")
         snapshot = collect_snapshot(client, DEFAULT_UNIVERSE)
+        port_val = portfolio.get('cash', 25000)
         result   = run_scoring_cycle(
             universe=DEFAULT_UNIVERSE,
             snapshot=snapshot,
             regime=regime_state.regime,
+            portfolio_value=port_val,
         )
         print_cycle_result(result)
         print("  📝 Pre-score complete — no trades executed (market closed)")
@@ -291,6 +295,10 @@ def run_cycle(client):
     # ── Market open: full trading cycle ──────────────────────────────────────
     print("\n📊 Market open — running full trading cycle...")
     snapshot = collect_snapshot(client, DEFAULT_UNIVERSE)
+
+    # Pre-fetch float-adjusted dark pool thresholds for all symbols
+    print("  Fetching float-adjusted dark pool thresholds...")
+    dp_thresholds = get_dp_thresholds_bulk(client, DEFAULT_UNIVERSE)
 
     # ── Step 5: Risk checks ───────────────────────────────────────────────────
     print("\n🛡️  Running risk checks...")
@@ -410,10 +418,15 @@ def run_cycle(client):
             candidates = []
     else:
         print("  ⚠️  No watchlist — running live scoring...")
+        port_val = portfolio.get('cash', 0) + sum(
+            p.get('quantity', 0) * p.get('avg_price', 0)
+            for p in portfolio.get('positions', {}).values()
+        )
         score_result = run_scoring_cycle(
             universe=passed_symbols,
             snapshot=snapshot,
             regime=regime_state.regime,
+            portfolio_value=port_val,
         )
         print_cycle_result(score_result)
         candidates = score_result.candidates
@@ -456,6 +469,18 @@ def run_cycle(client):
         pos = paper_sell_covered_call(signal, portfolio)
         if pos:
             print(f"  ✅ Covered call sold: {signal.symbol}")
+
+    # Execute cash-secured puts (high-conviction entries at a discount)
+    from options_manager import paper_sell_csp
+    for signal in options_eval.get('csps', []):
+        portfolio = load_portfolio()
+        # Skip if already have a position in this symbol
+        if signal.symbol in portfolio.get('positions', {}):
+            continue
+        pos = paper_sell_csp(signal, portfolio)
+        if pos:
+            print(f"  ✅ CSP sold: {signal.symbol} — "
+                  f"effective buy ${pos['effective_cost']:.2f} if assigned")
 
     # ── Final portfolio snapshot ───────────────────────────────────────────────
     print("\n📄 End-of-cycle portfolio:")

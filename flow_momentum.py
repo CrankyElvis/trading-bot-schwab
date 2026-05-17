@@ -41,23 +41,41 @@ UW_BASE_URL = 'https://api.unusualwhales.com/api'
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-MIN_SCORE           = 0.75
-MAX_CANDIDATES      = 4
+MIN_SCORE           = 0.80   # raised from 0.75 — win rate needs improvement
+MAX_CANDIDATES      = 4      # base — overridden dynamically by get_max_candidates()
+
+# Dynamic candidate scaling — grows with portfolio
+CANDIDATE_TIERS = [
+    (200_000, 8),   # > $200k  → 8 candidates
+    (100_000, 7),   # > $100k  → 7 candidates
+    ( 60_000, 6),   # > $60k   → 6 candidates
+    ( 30_000, 5),   # > $30k   → 5 candidates
+    (      0, 4),   # default  → 4 candidates
+]
+
+def get_max_candidates(portfolio_value: float) -> int:
+    """Returns MAX_CANDIDATES scaled to current portfolio size."""
+    for threshold, candidates in CANDIDATE_TIERS:
+        if portfolio_value >= threshold:
+            return candidates
+    return 4
 MIN_SIGNALS_FIRING  = 3       # at least 3 signals must score > 0.30
 MIN_SWEEP_PREMIUM   = 500_000 # minimum UW sweep premium to count ($500k)
 REQUIRE_DIRECTION   = True    # only enter bullish signals in flow/neutral
 
 WEIGHTS = {
-    'sweep_flow':    0.25,   # reduced — proxy bias confirmed in backtest
-    'dark_pool':     0.25,   # increased — highest edge signal in backtest (+0.079)
-    'politician':    0.10,   # reduced — dead weight until real data added
-    'insider':       0.05,   # reduced — dead weight until SEC EDGAR added
-    'price_rvol':    0.10,   # unchanged — solid confirmation signal
-    'gex':           0.05,   # unchanged
-    'market_tide':   0.08,   # increased — good edge in backtest (+0.039)
-    'sector_tide':   0.08,   # increased — good edge in backtest (+0.041)
-    'etf_flow':      0.04,   # reduced — negative edge in backtest (-0.032)
+    'sweep_flow':    0.10,   # reduced — consistently negative edge in backtests
+    'dark_pool':     0.10,   # reduced — edge was minimal as proxy signal
+    'politician':    0.05,   # minimal — dead weight until real data added
+    'insider':       0.05,   # minimal — dead weight until SEC EDGAR added
+    'price_rvol':    0.05,   # reduced — negative edge in backtest
+    'gex':           0.03,   # minimal — weak proxy signal
+    'market_tide':   0.32,   # ⬆️ massively increased — highest edge +0.050
+    'sector_tide':   0.27,   # ⬆️ massively increased — second highest edge +0.056
+    'etf_flow':      0.03,   # minimal — negative edge in backtest
 }
+# Note: weights sum to 1.0
+# market_tide + sector_tide now dominate (59%) — confirmed best predictors
 
 assert abs(sum(WEIGHTS.values()) - 1.0) < 0.001, "Weights must sum to 1.0"
 
@@ -591,21 +609,25 @@ def score_stock(
 # ── Score Full Universe ───────────────────────────────────────────────────────
 
 def run_scoring_cycle(
-    universe:      list,
-    snapshot:      dict,
-    regime:        str = 'neutral',
+    universe:        list,
+    snapshot:        dict,
+    regime:          str   = 'neutral',
+    portfolio_value: float = 0.0,
 ) -> CycleResult:
     """
     Scores every symbol in the universe and returns top candidates.
+    MAX_CANDIDATES scales dynamically with portfolio value.
 
     Args:
-        universe:  List of ticker symbols to score
-        snapshot:  Output of data_collector.collect_snapshot()
-        regime:    Current regime string (adjusts urgency/filtering)
+        universe:        List of ticker symbols to score
+        snapshot:        Output of data_collector.collect_snapshot()
+        regime:          Current regime string (adjusts urgency/filtering)
+        portfolio_value: Current portfolio value for dynamic candidate scaling
 
     Returns:
         CycleResult with qualified candidates sorted by score descending
     """
+    dynamic_max = get_max_candidates(portfolio_value) if portfolio_value > 0 else MAX_CANDIDATES
     uw_flow    = snapshot.get('uw_flow', {})
     dp_df      = snapshot.get('uw_darkpool', pd.DataFrame())
     prices     = snapshot.get('price_history', {})
@@ -655,8 +677,9 @@ def run_scoring_cycle(
     # Sort by score descending
     all_scores.sort(key=lambda x: x.total_score, reverse=True)
 
-    # Apply threshold + cap
-    candidates = [s for s in all_scores if s.qualifies][:MAX_CANDIDATES]
+    # Apply threshold + cap (dynamic based on portfolio size)
+    max_n      = dynamic_max if portfolio_value > 0 else MAX_CANDIDATES
+    candidates = [s for s in all_scores if s.qualifies][:max_n]
 
     # In crisis regime, only bullish signals qualify
     if regime == 'crisis':
@@ -680,7 +703,9 @@ def print_cycle_result(result: CycleResult):
     print(f"  Cycle time:     {result.cycle_time[:19]}")
     print(f"  Stocks scored:  {len(result.all_scores)}")
     print(f"  Signals fired:  {result.signals_fired}")
-    print(f"  Threshold:      {MIN_SCORE}  |  Max picks: {MAX_CANDIDATES}")
+    max_shown = dynamic_max if portfolio_value > 0 else MAX_CANDIDATES
+    print(f"  Threshold:      {MIN_SCORE}  |  Max picks: {max_shown}"
+          f"{'  (scaled)' if max_shown != MAX_CANDIDATES else ''}")
     print(f"\n  {'Symbol':<8} {'Score':>6}  {'Dir':<10} {'Qualifies'}")
     print(f"  {'-'*40}")
     for s in result.all_scores[:10]:   # show top 10

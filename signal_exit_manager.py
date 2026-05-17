@@ -43,7 +43,7 @@ FLOW_LOOKBACK_HOURS   = 48     # hours to look back for flow activity
 MIN_FLOW_PREMIUM      = 100_000 # minimum sweep premium to count as active flow
 
 # Hard safety rails
-STOP_LOSS_PCT         = 0.07
+STOP_LOSS_PCT         = 0.05   # tightened from 7% — stop losses averaging -$444
 TAKE_PROFIT_FLOW      = 0.20   # 20% in flow regime (hard backup)
 TAKE_PROFIT_DEFAULT   = 0.15   # 15% in neutral (hard backup)
 CRISIS_STOP_PCT       = 0.05
@@ -451,6 +451,46 @@ def check_signal_exits(
     positions  = portfolio.get('positions', {})
     trade_log  = portfolio.get('trade_log', [])
     results    = []
+
+    # Also check CSP positions for assignment / profit taking
+    options_positions = portfolio.get('options_positions', [])
+    for opt_pos in options_positions:
+        if opt_pos.get('type') == 'cash_secured_put':
+            sym     = opt_pos.get('symbol', '')
+            strike  = opt_pos.get('strike', 0)
+            expiry  = opt_pos.get('expiry', '')
+            premium = opt_pos.get('entry_premium', 0)
+            last    = quotes.get(sym, {}).get('last', 0)
+
+            # Check if approaching expiry (5 days)
+            try:
+                from datetime import datetime
+                exp_date  = datetime.strptime(expiry, '%Y-%m-%d')
+                days_left = (exp_date - datetime.now()).days
+            except Exception:
+                days_left = 99
+
+            if last > 0 and last < strike:
+                # In the money — assignment likely
+                results.append(SignalExitResult(
+                    symbol=sym, should_exit=True,
+                    reason='csp_assignment_likely',
+                    current_score=0.85, entry_score=0.85,
+                    score_delta=0.0,
+                    current_pnl_pct=round((last - strike)/strike*100, 2),
+                    current_price=last, avg_price=strike,
+                    days_held=0, triggers={'csp': {'days_left': days_left}},
+                ))
+            elif days_left <= 5:
+                # Near expiry and OTM — close for profit
+                results.append(SignalExitResult(
+                    symbol=sym, should_exit=True,
+                    reason='csp_near_expiry_otm',
+                    current_score=0.85, entry_score=0.85,
+                    score_delta=0.0, current_pnl_pct=100.0,
+                    current_price=last, avg_price=strike,
+                    days_held=0, triggers={'csp': {'days_left': days_left}},
+                ))
 
     for symbol, position in positions.items():
         # Skip parking positions — never signal-exit GLD/SCHP/VTIP/GDX

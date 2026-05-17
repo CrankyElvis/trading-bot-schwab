@@ -376,6 +376,138 @@ def check_options_exits(
     return exits
 
 
+
+# ── Cash-Secured Put Strategy ─────────────────────────────────────────────────
+
+CSP_MIN_SCORE    = 0.85   # only sell CSPs on very high conviction signals
+CSP_OTM_PCT      = 0.04   # sell put 4% below current price
+CSP_DTE_TARGET   = 21     # 3-week expiry — balance premium vs assignment risk
+CSP_MIN_PREMIUM  = 0.50   # minimum $0.50 premium per share to be worth it
+CSP_MAX_BUDGET   = 0.25   # max 25% of idle cash in CSPs at once
+
+
+def evaluate_csp(
+    symbol:     str,
+    score:      float,
+    last_price: float,
+    vixy:       float,
+    regime:     str,
+    idle_cash:  float,
+) -> OptionsSignal | None:
+    """
+    Evaluates whether to sell a cash-secured put on a high-conviction symbol.
+
+    Only fires when:
+      - Score >= CSP_MIN_SCORE (0.85) — very high conviction
+      - Regime is flow or neutral — not in volatility/crisis
+      - Sufficient cash to secure the put
+
+    Strike: 4% below current price (we WANT to own this stock at a discount)
+    DTE: 21 days — enough time value, not too long
+
+    Two outcomes:
+      1. Put expires worthless  → keep premium, re-evaluate
+      2. Assigned at strike     → own shares at 4% discount + premium
+                                   → immediately eligible for covered calls
+    """
+    if score < CSP_MIN_SCORE:
+        return None
+    if regime in ('volatility', 'crisis'):
+        return None
+    if last_price <= 0 or idle_cash <= 0:
+        return None
+
+    # Strike: 4% OTM (below current price for puts)
+    strike = round(last_price * (1 - CSP_OTM_PCT), 2)
+
+    # Cash required to secure put: strike × 100 × contracts
+    max_budget  = idle_cash * CSP_MAX_BUDGET
+    contracts   = max(1, min(5, int(max_budget / (strike * 100))))
+    cash_needed = strike * contracts * 100
+
+    if cash_needed > idle_cash * 0.90:
+        contracts  = max(1, int(idle_cash * 0.90 / (strike * 100)))
+        cash_needed = strike * contracts * 100
+
+    if contracts < 1:
+        return None
+
+    # Expiry: ~21 DTE, next Friday
+    from datetime import datetime, timedelta
+    expiry_dt = datetime.now() + timedelta(days=CSP_DTE_TARGET)
+    days_to_friday = (4 - expiry_dt.weekday()) % 7
+    expiry_dt += timedelta(days=days_to_friday)
+    expiry = expiry_dt.strftime('%Y-%m-%d')
+    dte    = (expiry_dt - datetime.now()).days
+
+    # Estimate put premium using Black-Scholes
+    import math
+    iv      = estimate_iv(vixy)
+    T       = dte / 365
+    # For puts: use put-call parity approximation
+    call_px = bs_call_price(last_price, strike, T, 0.05, iv)
+    # Put = call + PV(strike) - stock (put-call parity)
+    put_px  = max(call_px + strike * math.exp(-0.05 * T) - last_price, 0.05)
+
+    if put_px < CSP_MIN_PREMIUM:
+        return None   # premium too small to be worth the assignment risk
+
+    total_income  = round(put_px * contracts * 100, 2)
+    effective_buy = round(strike - put_px, 2)   # effective cost if assigned
+
+    return OptionsSignal(
+        symbol=symbol,
+        action='sell_csp',
+        strike=strike,
+        expiry=expiry,
+        estimated_premium=round(put_px, 4),
+        contracts=contracts,
+        estimated_cost=-total_income,   # negative = we receive premium
+        reason=(
+            f"CSP: sell {contracts}x ${strike:.2f}P {expiry} "
+            f"@ ~${put_px:.2f}  Income: +${total_income:.2f}  "
+            f"Effective buy if assigned: ${effective_buy:.2f}  "
+            f"Cash reserved: ${cash_needed:,.2f}"
+        ),
+        score=score,
+    )
+
+
+def paper_sell_csp(
+    signal:    OptionsSignal,
+    portfolio: dict,
+) -> dict | None:
+    """
+    Simulates selling a cash-secured put in paper trading.
+    Reserves the required cash as collateral.
+    Premium collected immediately.
+    """
+    income       = abs(signal.estimated_cost)
+    cash_needed  = signal.strike * signal.contracts * 100
+
+    position = {
+        'type':            'cash_secured_put',
+        'symbol':          signal.symbol,
+        'strike':          signal.strike,
+        'expiry':          signal.expiry,
+        'contracts':       signal.contracts,
+        'entry_premium':   signal.estimated_premium,
+        'premium_received': income,
+        'cash_reserved':   cash_needed,
+        'entry_date':      datetime.now().isoformat(),
+        'buyback_price':   round(signal.estimated_premium * 0.20, 4),  # buy back at 80% profit
+        'effective_cost':  round(signal.strike - signal.estimated_premium, 2),
+    }
+
+    print(f"  🟢 PAPER CSP: Sold {signal.contracts}x {signal.symbol} "
+          f"${signal.strike:.2f}P {signal.expiry} "
+          f"@ ${signal.estimated_premium:.2f} = +${income:,.2f} premium")
+    print(f"     Cash reserved: ${cash_needed:,.2f}  "
+          f"Effective cost if assigned: ${position['effective_cost']:.2f}")
+    print(f"     Buy back at: ${position['buyback_price']:.2f} (80% profit)")
+
+    return position
+
 # ── Main Evaluation ───────────────────────────────────────────────────────────
 
 def evaluate_options(
@@ -394,13 +526,28 @@ def evaluate_options(
     parking_pos  = {k: v for k, v in portfolio.get('positions', {}).items()
                     if k in PARKING_TICKERS}
 
-    # Long calls on high-conviction candidates
+    # Score-based entry routing:
+    #   score 0.85+  → sell cash-secured put (high conviction, want to own at discount)
+    #   score 0.80-0.84 → buy equity at market (handled by main.py execute_trades)
+    #   score 0.85+ in flow regime only → also eligible for long calls
     long_call_signals = []
+    csp_signals       = []
+
     for c in candidates:
         symbol = c.symbol if hasattr(c, 'symbol') else c.get('symbol', '')
         score  = c.total_score if hasattr(c, 'total_score') else c.get('score', 0)
         last   = quotes.get(symbol, {}).get('last', 0)
 
+        # CSP evaluation (score >= 0.85, any non-vol regime)
+        csp_signal = evaluate_csp(
+            symbol=symbol, score=score, last_price=last,
+            vixy=vixy, regime=regime, idle_cash=idle_cash,
+        )
+        if csp_signal:
+            csp_signals.append(csp_signal)
+            continue   # CSP takes priority over long call for same symbol
+
+        # Long call evaluation (score >= 0.85, flow regime only)
         signal = evaluate_long_call(
             symbol=symbol, score=score, last_price=last,
             vixy=vixy, regime=regime, idle_cash=idle_cash,
@@ -424,16 +571,18 @@ def evaluate_options(
     return {
         'long_calls':    long_call_signals,
         'covered_calls': covered_call_signals,
+        'csps':          csp_signals,
         'exits':         exit_signals,
     }
 
 
 def print_options_summary(options_eval: dict):
-    lc = options_eval.get('long_calls', [])
-    cc = options_eval.get('covered_calls', [])
-    ex = options_eval.get('exits', [])
+    lc  = options_eval.get('long_calls', [])
+    cc  = options_eval.get('covered_calls', [])
+    csp = options_eval.get('csps', [])
+    ex  = options_eval.get('exits', [])
 
-    if not lc and not cc and not ex:
+    if not lc and not cc and not csp and not ex:
         return
 
     print(f"\n{'='*55}")
@@ -453,6 +602,15 @@ def print_options_summary(options_eval: dict):
             income = abs(s.estimated_cost)
             print(f"  SELL {s.contracts}x {s.symbol} ${s.strike}C {s.expiry} "
                   f"@ ~${s.estimated_premium:.2f}  Income: +${income:,.2f}")
+
+    if csp:
+        print(f"\n  🟢 Cash-Secured Put Signals ({len(csp)}):")
+        for s in csp:
+            income = abs(s.estimated_cost)
+            eff    = round(s.strike - s.estimated_premium, 2)
+            print(f"  SELL {s.contracts}x {s.symbol} ${s.strike:.2f}P {s.expiry} "
+                  f"@ ~${s.estimated_premium:.2f}  Income: +${income:,.2f}  "
+                  f"Effective buy: ${eff:.2f}")
 
     if ex:
         print(f"\n  🚪 Options Exits ({len(ex)}):")

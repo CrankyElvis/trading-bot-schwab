@@ -45,20 +45,21 @@ try:
     )
     print(f"  Using live exit rules: stop={STOP_LOSS_PCT:.0%} profit={TAKE_PROFIT_PCT:.0%} hold={MAX_HOLD_DAYS}d")
 except ImportError:
-    STOP_LOSS_PCT, TAKE_PROFIT_PCT, MAX_HOLD_DAYS = 0.07, 0.15, 7
+    STOP_LOSS_PCT, TAKE_PROFIT_PCT, MAX_HOLD_DAYS = 0.05, 0.15, 7
     CRISIS_STOP_PCT, CRISIS_PROFIT_PCT, CRISIS_HOLD_DAYS = 0.05, 0.08, 2
 
 MIN_SCORE = 0.50   # Lowered for backtest — proxy signals weaker than live UW flow
 
-# Import weights directly from flow_momentum — stays in sync with live bot
+# Import weights and dynamic candidate scaling from flow_momentum
 try:
-    from flow_momentum import WEIGHTS as CURRENT_WEIGHTS
+    from flow_momentum import WEIGHTS as CURRENT_WEIGHTS, get_max_candidates, MIN_SCORE as LIVE_MIN_SCORE
     print(f"  Using live bot weights from flow_momentum.py")
-except ImportError:
+except Exception:
+    def get_max_candidates(v): return 4
     CURRENT_WEIGHTS = {
-        'sweep_flow':  0.25, 'dark_pool':  0.25, 'politician': 0.10,
-        'insider':     0.05, 'price_rvol': 0.10, 'gex':        0.05,
-        'market_tide': 0.08, 'sector_tide':0.08, 'etf_flow':   0.04,
+        'sweep_flow':  0.10, 'dark_pool':   0.10, 'politician': 0.05,
+        'insider':     0.05, 'price_rvol':  0.05, 'gex':        0.03,
+        'market_tide': 0.32, 'sector_tide': 0.27, 'etf_flow':   0.03,
     }
 
 PARKING_ALLOC = {
@@ -404,28 +405,80 @@ class BacktestPortfolio:
         del self.positions[symbol]
         return pnl
 
-    def check_exits(self, prices, date, regime):
+    def check_exits(self, prices, date, regime, history=None, spy_hist=None):
         """
-        Fix 3: Only check exits on TRADING positions, never parking positions.
+        Signal-based exits replace hard time stops.
+        Hard stop loss and take profit remain as safety rails.
+        Additional exits: score decay, market tide turn.
+        Volatility regime: no new entries, but exits still run.
         """
         crisis     = (regime == 'crisis')
-        volatility = (regime == 'volatility')
-        stop   = CRISIS_STOP_PCT   if crisis else STOP_LOSS_PCT
-        profit = CRISIS_PROFIT_PCT if crisis else TAKE_PROFIT_PCT
-        maxh   = CRISIS_HOLD_DAYS  if crisis     else                  4                 if volatility else MAX_HOLD_DAYS
-        exits  = []
+        flow       = (regime == 'flow')
+        stop_pct   = CRISIS_STOP_PCT   if crisis else STOP_LOSS_PCT
+        profit_pct = CRISIS_PROFIT_PCT if crisis else                      0.20              if flow   else TAKE_PROFIT_PCT
+        exits      = []
+
+        # Market tide check
+        market_bearish = False
+        if spy_hist is not None and not spy_hist.empty:
+            spy_past = spy_hist[spy_hist.index <= pd.Timestamp(date)]
+            if len(spy_past) >= 20:
+                ema5  = spy_past['close'].ewm(span=5,  adjust=False).mean().iloc[-1]
+                ema20 = spy_past['close'].ewm(span=20, adjust=False).mean().iloc[-1]
+                market_bearish = ema5 < ema20
 
         for symbol, pos in self.positions.items():
-            if pos.is_parking:   # ← Fix: skip parking positions
-                continue
+            if pos.is_parking: continue
             price = prices.get(symbol, 0)
-            if price <= 0:
+            if price <= 0: continue
+
+            pnl_pct = (price - pos.entry_price) / pos.entry_price
+
+            # 1. Stop loss (hard floor)
+            if pnl_pct <= -stop_pct:
+                exits.append((symbol, price, 'stop_loss'))
                 continue
-            pnl_pct   = (price - pos.entry_price) / pos.entry_price
-            hold_days = (date - pos.entry_date).days
-            if pnl_pct <= -stop:    exits.append((symbol, price, 'stop_loss'))
-            elif pnl_pct >= profit: exits.append((symbol, price, 'take_profit'))
-            elif hold_days >= maxh: exits.append((symbol, price, 'time_stop'))
+
+            # 2. Covered call exit zone (+15% to +25%, round lot only)
+            shares = int(pos.cost_basis / pos.entry_price) if pos.entry_price > 0 else 0
+            if 0.15 <= pnl_pct < 0.25 and shares >= 100:
+                # In backtest: simulate CC by holding and collecting premium (~1% of value)
+                # Don't exit equity — let it continue (CC will eventually call it away)
+                # We just note it as CC mode but keep holding for simplicity
+                pass
+
+            # 3. Hard take profit (backup: >20% flow, >25% any, or odd lot)
+            if pnl_pct >= profit_pct:
+                exits.append((symbol, price, 'take_profit'))
+                continue
+
+            # 4. Market tide turned bearish (signal-based exit)
+            entry_tide = pos.signals.get('entry_tide', 'bullish')
+            if market_bearish and entry_tide == 'bullish':
+                exits.append((symbol, price, 'market_tide_bearish'))
+                continue
+
+            # 5. Score decay — re-score using price/volume proxy
+            if history is not None:
+                df = history.get(symbol)
+                if df is not None and not df.empty:
+                    past = df[df.index <= pd.Timestamp(date)]
+                    if len(past) >= 21:
+                        closes  = past['close']
+                        volumes = past['volume']
+                        avg_vol = volumes.iloc[-21:-1].mean()
+                        rvol    = volumes.iloc[-1] / avg_vol if avg_vol > 0 else 1.0
+                        mom5    = (closes.iloc[-1] - closes.iloc[-6]) / closes.iloc[-6] if len(closes) >= 6 else 0
+                        ema20   = closes.ewm(span=20, adjust=False).mean().iloc[-1]
+                        curr_score = 0.0
+                        if rvol >= 1.5 and mom5 > 0.01: curr_score += 0.40
+                        elif rvol >= 1.2:                curr_score += 0.20
+                        if closes.iloc[-1] > ema20:      curr_score += 0.30
+                        if rvol >= 2.0:                  curr_score += 0.20
+                        entry_score = pos.signals.get('entry_score', 0.75)
+                        if curr_score < 0.40 or (entry_score > 0 and curr_score < entry_score * 0.50):
+                            exits.append((symbol, price, 'score_decay'))
+                            continue
 
         for symbol, price, reason in exits:
             self.sell(symbol, price, date, reason, regime)
@@ -490,7 +543,7 @@ def run_backtest(client, start=None, end=None, capital=STARTING_CAPITAL) -> dict
                            if actual_start <= d <= actual_end])
 
     print(f"\n{'='*62}")
-    print(f"  BACKTESTER v2  (real VIX, parking excluded from stops)")
+    print(f"  BACKTESTER v3  (signal exits, CSP simulation, dynamic candidates, volatility block)")
     print(f"  Period:  {actual_start.date()} → {actual_end.date()}")
     print(f"  Capital: ${capital:,.2f}")
     print(f"  Trading days: {len(trading_days)}")
@@ -539,18 +592,52 @@ def run_backtest(client, start=None, end=None, capital=STARTING_CAPITAL) -> dict
             top       = sorted(scores.items(), key=lambda x: x[1][0], reverse=True)[:max_new]
             idle_cash = portfolio.cash * 0.90
 
+            # Determine market tide at entry
+            spy_past_now = spy_hist[spy_hist.index <= date]
+            entry_tide   = 'neutral'
+            if len(spy_past_now) >= 20:
+                e5  = spy_past_now['close'].ewm(span=5,  adjust=False).mean().iloc[-1]
+                e20 = spy_past_now['close'].ewm(span=20, adjust=False).mean().iloc[-1]
+                entry_tide = 'bullish' if e5 > e20 else 'bearish'
+
             for symbol, (score, sigs) in top:
-                price       = prices.get(symbol, 0)
+                price = prices.get(symbol, 0)
+                if price <= 0:
+                    continue
+
+                # Store entry metadata for signal-based exits
+                if sigs is not None:
+                    sigs['entry_score'] = score
+                    sigs['entry_tide']  = entry_tide
+
+                # ── CSP simulation (score >= 0.85) ────────────────────────
+                # Instead of buying equity, simulate selling a cash-secured put
+                # If price stays above strike → collect premium (modeled as 1.5% of position)
+                # If price drops to strike    → "assigned" into equity position
+                if score >= 0.85 and portfolio.cash > price * 100:
+                    strike        = round(price * 0.96, 2)    # 4% OTM put
+                    contracts     = max(1, min(3, int(portfolio.cash * 0.20 / (strike * 100))))
+                    premium_est   = price * 0.015 * contracts  # ~1.5% premium estimate
+                    cash_reserved = strike * contracts * 100
+
+                    # Simulate outcome: 60% expire worthless (keep premium), 40% assigned
+                    # In backtest we model as: buy at effective_cost = strike - premium
+                    effective_cost = strike - (premium_est / contracts / 100)
+                    pos_dollars    = effective_cost * contracts * 100
+
+                    if pos_dollars <= portfolio.cash * 0.90:
+                        sigs['csp_entry']   = True
+                        sigs['csp_strike']  = strike
+                        sigs['csp_premium'] = premium_est
+                        portfolio.buy(symbol, pos_dollars, effective_cost, dt, regime,
+                                      signals=sigs, is_parking=False)
+                        portfolio.total_fees += premium_est * -1  # premium = income
+                        continue
+
+                # ── Standard equity buy (score 0.50-0.84) ────────────────
                 pos_dollars = idle_cash * BASE_POSITION_PCT * size_sc
                 pos_dollars = min(pos_dollars, portfolio.cash * 0.90)
-                if pos_dollars >= price > 0:
-                    # Store entry metadata for signal-based exit
-                    if sigs is not None:
-                        sigs['entry_score'] = score
-                        sigs['entry_tide']  = 'bullish' if len(spy_hist[spy_hist.index <= date]) >= 20 and \
-                            spy_hist[spy_hist.index <= date]['close'].ewm(span=5, adjust=False).mean().iloc[-1] > \
-                            spy_hist[spy_hist.index <= date]['close'].ewm(span=20, adjust=False).mean().iloc[-1] \
-                            else 'bearish'
+                if pos_dollars >= price:
                     portfolio.buy(symbol, pos_dollars, price, dt, regime,
                                   signals=sigs, is_parking=False)
 
@@ -711,6 +798,11 @@ def compile_results(portfolio, start, end, capital) -> dict:
         exit_reasons[r]['avg_pnl']   = round(exit_reasons[r]['total_pnl'] / c, 2) if c else 0
         exit_reasons[r]['total_pnl'] = round(exit_reasons[r]['total_pnl'], 2)
 
+    # CSP stats
+    csp_trades   = [t for t in sell_trades if t.entry_signals.get('csp_entry')]
+    eq_trades    = [t for t in sell_trades if not t.entry_signals.get('csp_entry')]
+    csp_premium  = sum(t.entry_signals.get('csp_premium', 0) for t in csp_trades)
+
     # Signal contributions
     signal_contrib = analyse_signals(sell_trades)
 
@@ -726,6 +818,9 @@ def compile_results(portfolio, start, end, capital) -> dict:
             'max_drawdown_pct':  round(max_dd * 100, 2),
             'win_rate_pct':      round(win_rate * 100, 1),
             'total_trades':      len(sell_trades),
+            'csp_trades':        len(csp_trades),
+            'csp_premium_total': round(csp_premium, 2),
+            'equity_trades':     len(eq_trades),
             'parking_pnl':       round(parking_pnl, 2),
             'total_fees':        round(portfolio.total_fees, 2),
             'trading_days':      len(snaps),
@@ -917,6 +1012,10 @@ def print_results(results, recs):
     print(f"  Trading trades:     {s['total_trades']:>10}")
     print(f"  Parking P&L:        ${s['parking_pnl']:>+12,.2f}")
     print(f"  Total fees:         ${s['total_fees']:>12,.2f}")
+    print(f"  ── Entry breakdown ───────────────────────────────────")
+    print(f"  CSP entries:        {s.get('csp_trades',0):>10}  "
+          f"(premium collected: ${s.get('csp_premium_total',0):>+8,.2f})")
+    print(f"  Equity entries:     {s.get('equity_trades',0):>10}")
 
     if 'benchmark' in results:
         b = results['benchmark']

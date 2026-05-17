@@ -1,0 +1,104 @@
+{
+  "weight_changes": {
+    "sweep_flow": {
+      "current": 0.1,
+      "recommended": 0.268,
+      "change": 0.168,
+      "direction": "\u2b06\ufe0f",
+      "reason": "edge=+0.125  corr=+0.015"
+    },
+    "dark_pool": {
+      "current": 0.1,
+      "recommended": 0.145,
+      "change": 0.045,
+      "direction": "\u2b06\ufe0f",
+      "reason": "edge=+0.033  corr=+0.028"
+    },
+    "politician": {
+      "current": 0.05,
+      "recommended": 0.018,
+      "change": -0.032,
+      "direction": "\u2b07\ufe0f",
+      "reason": "edge=+0.000  corr=+0.000"
+    },
+    "insider": {
+      "current": 0.05,
+      "recommended": 0.018,
+      "change": -0.032,
+      "direction": "\u2b07\ufe0f",
+      "reason": "edge=+0.000  corr=+0.000"
+    },
+    "price_rvol": {
+      "current": 0.05,
+      "recommended": 0.018,
+      "change": -0.032,
+      "direction": "\u2b07\ufe0f",
+      "reason": "edge=+0.042  corr=-0.018"
+    },
+    "gex": {
+      "current": 0.03,
+      "recommended": 0.479,
+      "change": 0.449,
+      "direction": "\u2b06\ufe0f",
+      "reason": "edge=+0.181  corr=+0.051"
+    },
+    "market_tide": {
+      "current": 0.32,
+      "recommended": 0.018,
+      "change": -0.302,
+      "direction": "\u2b07\ufe0f",
+      "reason": "edge=+0.000  corr=+0.000"
+    },
+    "sector_tide": {
+      "current": 0.27,
+      "recommended": 0.018,
+      "change": -0.252,
+      "direction": "\u2b07\ufe0f",
+      "reason": "edge=+0.000  corr=+0.000"
+    }
+  },
+  "new_data_sources": [
+    {
+      "source": "Quiver Quantitative",
+      "url": "https://api.quiverquant.com",
+      "cost": "$50/month",
+      "signals": [
+        "politician_trading",
+        "government_contracts",
+        "lobbying"
+      ],
+      "reason": "Politician/insider signals returned 0 in backtest (no historical API). Quiver has congressional trading data back to 2012."
+    },
+    {
+      "source": "SEC EDGAR Form 4 (insider buying)",
+      "url": "https://efts.sec.gov/LATEST/search-index?q=",
+      "cost": "Free",
+      "signals": [
+        "insider_form4",
+        "13f_holdings"
+      ],
+      "reason": "Real historical insider buying data. Fixes the insider signal gap."
+    },
+    {
+      "source": "CBOE VIX Term Structure",
+      "url": "https://cdn.cboe.com/api/global/us_indices/daily_prices/VIX_History.csv",
+      "cost": "Free \u2014 already integrated in v2",
+      "signals": [
+        "vix_contango",
+        "vol_regime"
+      ],
+      "reason": "Already fixed in this version. VIX9D vs VIX vs VIX3M spread predicts vol spikes 3-5 days early."
+    }
+  ],
+  "regime_adjustments": [
+    "Best regime: NEUTRAL (+1154.9%). Consider MAX_CANDIDATES=5 in neutral regime.",
+    "Worst regime: VOLATILITY (-19.5%). Consider BASE_POSITION_PCT=0.15 in volatility regime."
+  ],
+  "exit_adjustments": [
+    "Stop losses averaging $-996. Consider tightening from 7% to 5%.",
+    "Take profits averaging $5,352. Consider raising from 15% to 20% in flow regime to let winners run."
+  ],
+  "general": [
+    "Annual return 283.0% \u2014 strategy is working. Focus on drawdown reduction next."
+  ]
+}
