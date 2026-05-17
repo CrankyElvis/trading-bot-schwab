@@ -63,11 +63,12 @@ def check_position_exit(
     Returns:
         ExitSignal with should_exit=True if any rule fires
     """
-    crisis = (regime == 'crisis')
+    crisis      = (regime == 'crisis')
+    volatility  = (regime == 'volatility')
 
-    stop_pct   = CRISIS_STOP_PCT   if crisis else STOP_LOSS_PCT
-    profit_pct = CRISIS_PROFIT_PCT if crisis else TAKE_PROFIT_PCT
-    max_days   = CRISIS_HOLD_DAYS  if crisis else MAX_HOLD_DAYS
+    stop_pct   = CRISIS_STOP_PCT      if crisis     else STOP_LOSS_PCT
+    profit_pct = CRISIS_PROFIT_PCT    if crisis     else TAKE_PROFIT_PCT
+    max_days   = CRISIS_HOLD_DAYS     if crisis     else                  VOLATILITY_HOLD_DAYS if volatility else MAX_HOLD_DAYS
 
     avg_price = position.get('avg_price', current_price)
     if avg_price <= 0:

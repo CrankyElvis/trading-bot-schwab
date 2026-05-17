@@ -32,26 +32,34 @@ load_dotenv()
 # ── Config ────────────────────────────────────────────────────────────────────
 
 STARTING_CAPITAL  = 25_000.0
-STOP_LOSS_PCT     = 0.07
-TAKE_PROFIT_PCT   = 0.15
-MAX_HOLD_DAYS     = 5
+SPREAD_COST_PCT   = 0.0005
 MAX_POSITIONS     = 5
 BASE_POSITION_PCT = 0.20
-MIN_SCORE         = 0.50   # Lowered for backtest — proxy signals weaker than live UW flow
 MAX_CANDIDATES    = 4
-SPREAD_COST_PCT   = 0.0005
 
-CURRENT_WEIGHTS = {
-    'sweep_flow':  0.30,
-    'dark_pool':   0.15,
-    'politician':  0.15,
-    'insider':     0.10,
-    'price_rvol':  0.10,
-    'gex':         0.05,
-    'market_tide': 0.05,
-    'sector_tide': 0.05,
-    'etf_flow':    0.05,
-}
+# Import live bot thresholds — stays in sync automatically
+try:
+    from exit_manager import (
+        STOP_LOSS_PCT, TAKE_PROFIT_PCT,
+        MAX_HOLD_DAYS, CRISIS_STOP_PCT, CRISIS_PROFIT_PCT, CRISIS_HOLD_DAYS,
+    )
+    print(f"  Using live exit rules: stop={STOP_LOSS_PCT:.0%} profit={TAKE_PROFIT_PCT:.0%} hold={MAX_HOLD_DAYS}d")
+except ImportError:
+    STOP_LOSS_PCT, TAKE_PROFIT_PCT, MAX_HOLD_DAYS = 0.07, 0.15, 7
+    CRISIS_STOP_PCT, CRISIS_PROFIT_PCT, CRISIS_HOLD_DAYS = 0.05, 0.08, 2
+
+MIN_SCORE = 0.50   # Lowered for backtest — proxy signals weaker than live UW flow
+
+# Import weights directly from flow_momentum — stays in sync with live bot
+try:
+    from flow_momentum import WEIGHTS as CURRENT_WEIGHTS
+    print(f"  Using live bot weights from flow_momentum.py")
+except ImportError:
+    CURRENT_WEIGHTS = {
+        'sweep_flow':  0.25, 'dark_pool':  0.25, 'politician': 0.10,
+        'insider':     0.05, 'price_rvol': 0.10, 'gex':        0.05,
+        'market_tide': 0.08, 'sector_tide':0.08, 'etf_flow':   0.04,
+    }
 
 PARKING_ALLOC = {
     'flow':       [('SCHP', 0.80), ('GLD', 0.20)],
@@ -60,15 +68,22 @@ PARKING_ALLOC = {
     'crisis':     [('GLD', 0.35),  ('GDX', 0.35),  ('SCHP', 0.30)],
 }
 
-UNIVERSE = [
-    'SPY', 'QQQ', 'IWM',
-    'XLK', 'XLF', 'XLE', 'XLV', 'XLI',
-    'AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL',
-    'META', 'TSLA', 'JPM', 'GS', 'BAC',
-]
+# Use pre_market_scanner universe — same 150 symbols as live bot
+# Import here to keep backtester in sync automatically
+try:
+    from pre_market_scanner import SCAN_UNIVERSE as UNIVERSE
+    print(f"  Using pre-market scanner universe: {len(UNIVERSE)} symbols")
+except ImportError:
+    UNIVERSE = [
+        'SPY', 'QQQ', 'IWM',
+        'XLK', 'XLF', 'XLE', 'XLV', 'XLI',
+        'AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL',
+        'META', 'TSLA', 'JPM', 'GS', 'BAC',
+    ]
+    print(f"  Using fallback universe: {len(UNIVERSE)} symbols")
 
 PARKING_TICKERS = ['GLD', 'GDX', 'SCHP', 'VTIP']
-ALL_TICKERS     = list(set(UNIVERSE + PARKING_TICKERS))   # no VIXY needed
+ALL_TICKERS     = list(set(UNIVERSE + PARKING_TICKERS))
 
 
 # ── Fix 1: Real VIX from CBOE ─────────────────────────────────────────────────
@@ -393,10 +408,11 @@ class BacktestPortfolio:
         """
         Fix 3: Only check exits on TRADING positions, never parking positions.
         """
-        crisis = (regime == 'crisis')
-        stop   = 0.05 if crisis else STOP_LOSS_PCT
-        profit = 0.08 if crisis else TAKE_PROFIT_PCT
-        maxh   = 3    if crisis else MAX_HOLD_DAYS
+        crisis     = (regime == 'crisis')
+        volatility = (regime == 'volatility')
+        stop   = CRISIS_STOP_PCT   if crisis else STOP_LOSS_PCT
+        profit = CRISIS_PROFIT_PCT if crisis else TAKE_PROFIT_PCT
+        maxh   = CRISIS_HOLD_DAYS  if crisis     else                  4                 if volatility else MAX_HOLD_DAYS
         exits  = []
 
         for symbol, pos in self.positions.items():
@@ -499,7 +515,7 @@ def run_backtest(client, start=None, end=None, capital=STARTING_CAPITAL) -> dict
         size_sc = get_size_scalar(vix)
 
         # Check exits (trading positions only)
-        portfolio.check_exits(prices, dt, regime)
+        portfolio.check_exits(prices, dt, regime, history, spy_hist)
 
         # Parking disabled in backtest — proxy signals already weak enough
         # Live bot uses real UW flow which generates much higher scores
@@ -528,6 +544,13 @@ def run_backtest(client, start=None, end=None, capital=STARTING_CAPITAL) -> dict
                 pos_dollars = idle_cash * BASE_POSITION_PCT * size_sc
                 pos_dollars = min(pos_dollars, portfolio.cash * 0.90)
                 if pos_dollars >= price > 0:
+                    # Store entry metadata for signal-based exit
+                    if sigs is not None:
+                        sigs['entry_score'] = score
+                        sigs['entry_tide']  = 'bullish' if len(spy_hist[spy_hist.index <= date]) >= 20 and \
+                            spy_hist[spy_hist.index <= date]['close'].ewm(span=5, adjust=False).mean().iloc[-1] > \
+                            spy_hist[spy_hist.index <= date]['close'].ewm(span=20, adjust=False).mean().iloc[-1] \
+                            else 'bearish'
                     portfolio.buy(symbol, pos_dollars, price, dt, regime,
                                   signals=sigs, is_parking=False)
 

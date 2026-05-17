@@ -208,6 +208,84 @@ def check_market_tide(spy_history_df) -> tuple[bool, dict]:
         return False, {'error': str(e)}
 
 
+# ── Blocker 7: Momentum Confirmation ─────────────────────────────────────────
+
+def check_momentum(symbol: str, price_history: dict) -> tuple[bool, dict]:
+    """
+    Blocked if price is below its 10-day EMA — no catching falling knives.
+    Only enter when price has upward momentum confirmed.
+    """
+    try:
+        df = price_history.get(symbol, None)
+        if df is None or df.empty or len(df) < 11:
+            return False, {'note': 'Insufficient history for momentum check'}
+
+        closes = df['close']
+        ema10  = closes.ewm(span=10, adjust=False).mean().iloc[-1]
+        last   = closes.iloc[-1]
+        above  = last >= ema10
+
+        return not above, {
+            'last_price': round(float(last), 2),
+            'ema10':      round(float(ema10), 2),
+            'momentum':   '✅ above EMA10' if above else '❌ below EMA10',
+        }
+    except Exception as e:
+        return False, {'error': str(e)}
+
+
+# ── Blocker 8: Volatility Regime Entry Block ─────────────────────────────────
+
+def check_volatility_regime(regime: str, term_structure: dict = None) -> tuple:
+    if regime == 'volatility':
+        return True, {
+            'reason': 'Volatility regime — no new entries, exits only',
+            'regime': regime,
+        }
+    if term_structure and term_structure.get('halt_entries', False):
+        ts_signal = term_structure.get('signal', 'flat')
+        return True, {
+            'reason':  f'VIX term structure {ts_signal} — halting entries',
+            'vix9d':   term_structure.get('vix9d', 0),
+            'vix3m':   term_structure.get('vix3m', 0),
+            'spread':  term_structure.get('spread', 0),
+        }
+    return False, {
+        'regime':      regime,
+        'term_signal': term_structure.get('signal', 'flat') if term_structure else 'n/a',
+    }
+
+
+# ── Blocker 9: Rolling 30-Day Circuit Breaker ─────────────────────────────────
+
+def check_circuit_breaker(portfolio: dict, threshold: float = 0.10) -> tuple:
+    try:
+        trade_log = portfolio.get('trade_log', [])
+        if not trade_log:
+            return False, {'note': 'No trade history'}
+        from datetime import datetime, timezone, timedelta
+        now      = datetime.now(timezone.utc)
+        cutoff   = now - timedelta(days=30)
+        starting = float(portfolio.get('starting_cash', 25000))
+        recent_pnl = sum(
+            t.get('profit_loss', 0) for t in trade_log
+            if t.get('type') == 'SELL'
+            and datetime.fromisoformat(
+                t.get('timestamp', now.isoformat()).replace('Z', '+00:00')
+            ).replace(tzinfo=timezone.utc) >= cutoff
+        )
+        pnl_pct   = recent_pnl / starting if starting > 0 else 0
+        triggered = pnl_pct <= -threshold
+        return triggered, {
+            'rolling_30d_pnl': f'${recent_pnl:,.2f}',
+            'rolling_30d_pct': f'{pnl_pct*100:.2f}%',
+            'threshold':       f'-{threshold*100:.0f}%',
+            'status':          'TRIGGERED' if triggered else 'OK',
+        }
+    except Exception as e:
+        return False, {'error': str(e)}
+
+
 # ── Main Entry Point ──────────────────────────────────────────────────────────
 
 def run_risk_checks(
@@ -216,9 +294,11 @@ def run_risk_checks(
     spy_history_df,
     regime: str = 'neutral',
     skip: list  = None,
+    price_history: dict  = None,
+    term_structure: dict = None,
 ) -> RiskCheckResult:
     """
-    Runs all 6 risk checks for a symbol. Returns RiskCheckResult.
+    Runs all 9 risk checks for a symbol. Returns RiskCheckResult.
 
     Args:
         symbol:          Ticker to evaluate
@@ -226,12 +306,14 @@ def run_risk_checks(
         spy_history_df:  DataFrame with SPY OHLCV (needs 'close' column)
         regime:          Current regime — tightens limits in 'crisis'
         skip:            Blocker names to bypass (for testing)
+        price_history:   Dict of {symbol: DataFrame} for momentum check
     """
     skip   = skip or []
     crisis = (regime == 'crisis')
     blocked = []
     details = {}
 
+    ph = price_history or {}
     checks = [
         ('drawdown',      lambda: check_drawdown(portfolio)),
         ('max_positions', lambda: check_max_positions(portfolio, crisis)),
@@ -239,6 +321,9 @@ def run_risk_checks(
         ('fda',           lambda: check_fda(symbol)),
         ('macro',         lambda: check_macro()),
         ('market_tide',   lambda: check_market_tide(spy_history_df)),
+        ('momentum',         lambda: check_momentum(symbol, ph)),
+        ('volatility_regime',lambda: check_volatility_regime(regime, term_structure)),
+        ('circuit_breaker',  lambda: check_circuit_breaker(portfolio)),
     ]
 
     for name, fn in checks:

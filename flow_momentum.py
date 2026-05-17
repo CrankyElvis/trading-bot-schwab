@@ -41,19 +41,22 @@ UW_BASE_URL = 'https://api.unusualwhales.com/api'
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-MIN_SCORE      = 0.75
-MAX_CANDIDATES = 4
+MIN_SCORE           = 0.75
+MAX_CANDIDATES      = 4
+MIN_SIGNALS_FIRING  = 3       # at least 3 signals must score > 0.30
+MIN_SWEEP_PREMIUM   = 500_000 # minimum UW sweep premium to count ($500k)
+REQUIRE_DIRECTION   = True    # only enter bullish signals in flow/neutral
 
 WEIGHTS = {
-    'sweep_flow':    0.30,
-    'dark_pool':     0.15,
-    'politician':    0.15,
-    'insider':       0.10,
-    'price_rvol':    0.10,
-    'gex':           0.05,
-    'market_tide':   0.05,
-    'sector_tide':   0.05,
-    'etf_flow':      0.05,
+    'sweep_flow':    0.25,   # reduced — proxy bias confirmed in backtest
+    'dark_pool':     0.25,   # increased — highest edge signal in backtest (+0.079)
+    'politician':    0.10,   # reduced — dead weight until real data added
+    'insider':       0.05,   # reduced — dead weight until SEC EDGAR added
+    'price_rvol':    0.10,   # unchanged — solid confirmation signal
+    'gex':           0.05,   # unchanged
+    'market_tide':   0.08,   # increased — good edge in backtest (+0.039)
+    'sector_tide':   0.08,   # increased — good edge in backtest (+0.041)
+    'etf_flow':      0.04,   # reduced — negative edge in backtest (-0.032)
 }
 
 assert abs(sum(WEIGHTS.values()) - 1.0) < 0.001, "Weights must sum to 1.0"
@@ -139,16 +142,16 @@ def score_sweep_flow(symbol: str, uw_flow_df: pd.DataFrame) -> tuple[float, str]
         prem   = float(row.get('premium', 0) or 0)
         opt    = str(row.get('type', '')).upper()
 
-        # Sweep or repeated hit
+        # Sweep or repeated hit — filter by minimum premium threshold
         if 'sweep' in alert or 'repeatedhits' in alert or 'repeated' in alert:
-            if prem >= 1_000_000:
+            if prem < MIN_SWEEP_PREMIUM:
+                continue   # skip small retail flow — not institutional
+            if prem >= 2_000_000:
+                score += 0.50
+            elif prem >= 1_000_000:
                 score += 0.40
             elif prem >= 500_000:
                 score += 0.25
-            elif prem >= 100_000:
-                score += 0.10
-            else:
-                score += 0.05
 
         # Descending fill (aggressive buyer)
         if 'descending' in alert:
@@ -563,12 +566,23 @@ def score_stock(
 
     total = round(sum(weighted.values()), 4)
 
+    # Confirmation gate: require minimum number of signals firing
+    signals_firing = sum(1 for v in signals.values() if v >= 0.30)
+    confirmation_ok = signals_firing >= MIN_SIGNALS_FIRING
+
+    # Direction gate: in flow/neutral, require bullish direction
+    direction_ok = True
+    if REQUIRE_DIRECTION and direction == 'neutral':
+        direction_ok = False   # neutral direction = no edge, skip
+
+    qualifies = (total >= MIN_SCORE) and confirmation_ok and direction_ok
+
     return StockScore(
         symbol=symbol,
         total_score=total,
         signals=signals,
         weighted=weighted,
-        qualifies=(total >= MIN_SCORE),
+        qualifies=qualifies,
         direction=direction,
         timestamp=datetime.now().isoformat(),
     )

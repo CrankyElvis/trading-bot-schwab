@@ -2,20 +2,22 @@
 regime_engine.py
 Detects the current market regime using VIXY (VIX proxy) vs its 30-day
 rolling average, then outputs:
-  - regime:        'flow' | 'volatility' | 'neutral'
+  - regime:        'flow' | 'neutral' | 'volatility' | 'crisis'
   - position_size: scalar 0.0–1.0 (fraction of max capital per trade)
   - in_pause:      True if we just switched regimes (sit out 1 cycle)
 
 Regime rules:
-  VIXY > 30d avg * 1.15  →  volatility regime  (sell premium, tighter sizes)
-  VIXY < 30d avg * 0.85  →  flow regime        (ride momentum, fuller sizes)
-  otherwise              →  neutral             (reduced sizing, flow signals only)
+  VIXY > 40 (absolute)           →  crisis     (cash/inverse only, 10% size)
+  VIXY > 30d avg * 1.15          →  volatility (sell premium, tight sizes)
+  VIXY < 30d avg * 0.85          →  flow       (ride momentum, full sizes)
+  otherwise                      →  neutral    (reduced sizing, flow signals only)
 
 Position sizing (inverse VIXY scale):
   VIXY < 20   →  100% of max size
   VIXY 20-25  →   75%
   VIXY 25-30  →   50%
-  VIXY > 30   →   25%
+  VIXY 30-40  →   25%
+  VIXY > 40   →   10% (crisis — capital preservation)
 """
 
 import json
@@ -28,23 +30,30 @@ STATE_FILE = 'regime_state.json'
 
 @dataclass
 class RegimeState:
-    regime: str             # 'flow' | 'volatility' | 'neutral'
+    regime: str             # 'flow' | 'neutral' | 'volatility' | 'crisis'
     vixy: float             # current VIXY price
     vixy_30d_avg: float     # 30-day rolling average
     position_size: float    # 0.0 – 1.0
     in_pause: bool          # True = skip this cycle (just switched)
     previous_regime: str    # what regime was before this one
     updated_at: str         # ISO timestamp
+    term_signal: str        # VIX term structure signal: contango/flat/backwardation/inversion
+    halt_entries: bool      # True = term structure says halt new entries
 
 
 # ── Core Logic ───────────────────────────────────────────────────────────────
 
 def detect_regime(vixy: float, vixy_30d_avg: float) -> str:
     """
-    Compares current VIXY to its 30-day average and returns regime label.
+    Compares current VIXY level and ratio to 30-day average.
+    Crisis takes priority over all other signals — absolute VIXY > 40.
     """
     if vixy_30d_avg <= 0:
         return 'neutral'
+
+    # Crisis: absolute VIXY spike regardless of ratio
+    if vixy > 40:
+        return 'crisis'
 
     ratio = vixy / vixy_30d_avg
 
@@ -60,15 +69,18 @@ def get_position_size(vixy: float) -> float:
     """
     Returns a position size scalar (0.0–1.0) inversely proportional to VIXY.
     Higher VIXY = smaller positions = less risk.
+    Crisis mode (VIXY > 40) drops to 10% — capital preservation only.
     """
-    if vixy < 20:
-        return 1.00
-    elif vixy < 25:
-        return 0.75
-    elif vixy < 30:
-        return 0.50
-    else:
+    if vixy > 40:
+        return 0.10   # crisis — near-cash mode
+    elif vixy >= 30:
         return 0.25
+    elif vixy >= 25:
+        return 0.50
+    elif vixy >= 20:
+        return 0.75
+    else:
+        return 1.00
 
 
 def compute_vixy_30d_avg(vix_history_df) -> float:
@@ -105,13 +117,16 @@ def _save_state(state: RegimeState):
 
 # ── Main Entry Point ─────────────────────────────────────────────────────────
 
-def evaluate_regime(vixy: float, vix_history_df) -> RegimeState:
+def evaluate_regime(vixy: float, vix_history_df,
+                    term_structure: dict = None) -> RegimeState:
     """
     Full regime evaluation. Call this once per bot cycle.
 
     Args:
         vixy:           Current VIXY price (from data_collector.get_vix)
         vix_history_df: DataFrame from data_collector.get_vix_history (30 days)
+        term_structure: Optional dict from data_collector.get_vix_term_structure()
+                        Used to upgrade neutral->volatility on backwardation signal
 
     Returns:
         RegimeState dataclass with all fields populated.
@@ -124,6 +139,17 @@ def evaluate_regime(vixy: float, vix_history_df) -> RegimeState:
         vixy_30d_avg = vixy   # treat current as average
 
     new_regime = detect_regime(vixy, vixy_30d_avg)
+
+    # VIX term structure override: backwardation = upgrade to volatility regime
+    if term_structure and new_regime not in ('crisis',):
+        ts_signal = term_structure.get('signal', 'flat')
+        if ts_signal == 'backwardation' and new_regime == 'flow':
+            new_regime = 'neutral'
+            print(f"  ⚠️  Term structure backwardation — upgrading flow→neutral")
+        elif ts_signal in ('backwardation', 'inversion') and new_regime == 'neutral':
+            new_regime = 'volatility'
+            print(f"  ⚠️  Term structure {ts_signal} — upgrading neutral→volatility")
+
     position_size = get_position_size(vixy)
 
     # Check for regime switch (triggers 1-cycle pause)
@@ -131,6 +157,9 @@ def evaluate_regime(vixy: float, vix_history_df) -> RegimeState:
     previous_regime = prev.get('regime', new_regime)
     switched = (previous_regime != new_regime) and bool(prev)
     in_pause = switched
+
+    ts_signal    = term_structure.get('signal', 'flat') if term_structure else 'flat'
+    halt_entries = term_structure.get('halt_entries', False) if term_structure else False
 
     state = RegimeState(
         regime=new_regime,
@@ -140,6 +169,8 @@ def evaluate_regime(vixy: float, vix_history_df) -> RegimeState:
         in_pause=in_pause,
         previous_regime=previous_regime,
         updated_at=datetime.now().isoformat(),
+        term_signal=ts_signal,
+        halt_entries=halt_entries,
     )
 
     _save_state(state)
@@ -147,7 +178,7 @@ def evaluate_regime(vixy: float, vix_history_df) -> RegimeState:
 
 
 def print_regime_summary(state: RegimeState):
-    icons = {'flow': '🟢', 'volatility': '🔴', 'neutral': '🟡'}
+    icons = {'flow': '🟢', 'volatility': '🔴', 'neutral': '🟡', 'crisis': '🚨'}
     icon = icons.get(state.regime, '⚪')
     pause_str = '  ⏸  PAUSE CYCLE (regime just switched)' if state.in_pause else ''
 
@@ -158,6 +189,7 @@ def print_regime_summary(state: RegimeState):
     print(f"  VIXY:           {state.vixy:.2f}")
     print(f"  VIXY 30d avg:   {state.vixy_30d_avg:.2f}")
     print(f"  Position size:  {int(state.position_size * 100)}% of max")
+    print(f"  Term structure: {state.term_signal.upper()}{'  🛑 HALT ENTRIES' if state.halt_entries else ''}")
     if state.in_pause:
         print(f"  {pause_str}")
     print(f"  Updated:        {state.updated_at[:19]}")
@@ -189,7 +221,7 @@ if __name__ == '__main__':
     print(f"  {'VIXY':<8} {'30d avg':<10} {'Regime':<12} {'Size'}")
     print(f"  {'-'*40}")
     scenarios = [
-        (15, 18), (20, 22), (22, 20), (28, 22), (35, 22), (18, 22)
+        (15, 18), (20, 22), (22, 20), (28, 22), (35, 22), (18, 22), (42, 28), (55, 30)
     ]
     for v, avg in scenarios:
         import pandas as pd

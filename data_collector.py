@@ -27,11 +27,15 @@ AV_BASE            = 'https://www.alphavantage.co/query'
 FH_BASE            = 'https://finnhub.io/api/v1'
 
 # ── Universe ──────────────────────────────────────────────────────────────────
+# DEFAULT_UNIVERSE used for intraday snapshot (parking tickers + core ETFs)
+# Full 150-symbol scan is handled by pre_market_scanner.py at 6am ET
 DEFAULT_UNIVERSE = [
     'SPY', 'QQQ', 'IWM', 'DIA',
     'XLK', 'XLF', 'XLE', 'XLV', 'XLI',
     'AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL',
     'META', 'TSLA', 'JPM', 'GS', 'BAC',
+    # Parking tickers always included for cash manager
+    'GLD', 'GDX', 'SCHP', 'VTIP',
 ]
 
 VIX_SYMBOL = 'VIXY'   # Schwab doesn't expose $VIX.X; VIXY is the closest ETF proxy
@@ -524,6 +528,212 @@ def collect_snapshot(client, symbols: list = None) -> dict:
         'fear_greed':    fear_greed,
         'timestamp':     datetime.now(),
     }
+
+
+
+# ── CBOE VIX Term Structure ───────────────────────────────────────────────────
+
+def get_vix_term_structure() -> dict:
+    """
+    Fetches VIX9D, VIX (30d), VIX3M from CBOE free CSVs.
+    Returns dict with current levels and contango/backwardation signal.
+
+    Contango  (VIX9D < VIX < VIX3M) = calm market, safe to enter
+    Backwardation (VIX9D > VIX3M)   = fear spiking, halt new entries
+    Inversion = regime change warning
+
+    Signal values:
+      'contango'      — normal, entries ok
+      'flat'          — neutral
+      'backwardation' — fear spike, halt entries
+      'inversion'     — extreme warning
+    """
+    urls = {
+        'vix9d': 'https://cdn.cboe.com/api/global/us_indices/daily_prices/VIX9D_History.csv',
+        'vix':   'https://cdn.cboe.com/api/global/us_indices/daily_prices/VIX_History.csv',
+        'vix3m': 'https://cdn.cboe.com/api/global/us_indices/daily_prices/VIX3M_History.csv',
+    }
+    levels = {}
+    try:
+        import io
+        for name, url in urls.items():
+            r = requests.get(url, timeout=10)
+            if r.status_code != 200:
+                continue
+            df = pd.read_csv(io.StringIO(r.text))
+            df.columns = [c.strip().upper() for c in df.columns]
+            df['DATE'] = pd.to_datetime(df['DATE'])
+            df = df.sort_values('DATE')
+            levels[name] = round(float(df['CLOSE'].iloc[-1]), 2)
+            time.sleep(0.2)
+    except Exception as e:
+        print(f"  [!] VIX term structure error: {e}")
+        return {'vix9d': 0, 'vix': 0, 'vix3m': 0, 'signal': 'flat', 'spread': 0}
+
+    vix9d = levels.get('vix9d', 0)
+    vix30 = levels.get('vix', 0)
+    vix3m = levels.get('vix3m', 0)
+
+    if vix9d <= 0 or vix3m <= 0:
+        return {'vix9d': vix9d, 'vix': vix30, 'vix3m': vix3m,
+                'signal': 'flat', 'spread': 0}
+
+    spread = round(vix9d - vix3m, 2)
+
+    if vix9d > vix3m * 1.10:
+        signal = 'backwardation'   # fear spike — halt entries
+    elif vix9d > vix3m:
+        signal = 'inversion'       # mild warning
+    elif vix9d < vix3m * 0.90:
+        signal = 'contango'        # calm — safe to enter
+    else:
+        signal = 'flat'
+
+    return {
+        'vix9d':  vix9d,
+        'vix':    vix30,
+        'vix3m':  vix3m,
+        'spread': spread,
+        'signal': signal,
+        'halt_entries': signal in ('backwardation', 'inversion'),
+    }
+
+
+# ── SEC EDGAR Form 4 (Insider Buying) ─────────────────────────────────────────
+
+def get_sec_insider_buys(symbol: str, days: int = 14) -> list:
+    """
+    Fetches recent insider buying from SEC EDGAR full-text search.
+    Filters for Form 4 filings (insider transactions) with buy transactions.
+    Free, no API key required.
+    Returns list of buy transactions with date, insider name, shares, value.
+    """
+    try:
+        # EDGAR full-text search for Form 4 filings
+        url = 'https://efts.sec.gov/LATEST/search-index'
+        params = {
+            'q':        f'"{symbol}"',
+            'dateRange': 'custom',
+            'startdt':  (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d'),
+            'enddt':    datetime.now().strftime('%Y-%m-%d'),
+            'forms':    '4',
+        }
+        headers = {'User-Agent': 'trading-bot contact@example.com'}
+        r = requests.get(url, params=params, headers=headers, timeout=10)
+        if r.status_code != 200:
+            return []
+
+        hits = r.json().get('hits', {}).get('hits', [])
+        buys = []
+        for hit in hits[:10]:
+            src = hit.get('_source', {})
+            # Only include buys (transaction code P = purchase)
+            if 'P' in str(src.get('period_of_report', '')):
+                continue
+            display = src.get('display_date_filed', '')
+            entity  = src.get('entity_name', '')
+            buys.append({
+                'symbol':    symbol,
+                'filed':     display,
+                'insider':   entity,
+                'form':      src.get('form_type', '4'),
+                'accession': src.get('accession_no', ''),
+            })
+        return buys
+    except Exception as e:
+        print(f"  [!] SEC EDGAR error for {symbol}: {e}")
+        return []
+
+
+def score_sec_insider(symbol: str, days: int = 14) -> float:
+    """
+    Returns insider buying score 0-1 based on SEC Form 4 filings.
+    Multiple recent filings = higher score.
+    """
+    buys = get_sec_insider_buys(symbol, days)
+    if not buys:
+        return 0.0
+    # Score based on number of recent insider buy filings
+    if len(buys) >= 3:   return 1.0
+    elif len(buys) == 2: return 0.60
+    elif len(buys) == 1: return 0.30
+    return 0.0
+
+
+# ── Reddit WSB Sentiment ──────────────────────────────────────────────────────
+
+def get_reddit_sentiment(symbol: str) -> dict:
+    """
+    Fetches Reddit WSB sentiment for a symbol using free JSON API.
+    No API key required — uses Reddit's public JSON endpoint.
+    Returns dict with mention_count, sentiment (bullish/bearish/neutral), score.
+
+    Contrarian signal:
+      High mentions + bearish = potential buy (crowd is wrong)
+      High mentions + bullish = caution (crowd may be right but fading)
+    """
+    try:
+        headers = {'User-Agent': 'trading-bot/1.0'}
+        # Search WSB for symbol mentions in hot posts
+        url = f'https://www.reddit.com/r/wallstreetbets/search.json'
+        params = {
+            'q':      symbol,
+            'sort':   'new',
+            'limit':  25,
+            't':      'day',
+        }
+        r = requests.get(url, headers=headers, params=params, timeout=8)
+        if r.status_code != 200:
+            return {'mention_count': 0, 'sentiment': 'neutral', 'score': 0.5}
+
+        posts   = r.json().get('data', {}).get('children', [])
+        mentions = 0
+        bullish  = 0
+        bearish  = 0
+
+        bull_words = ['calls', 'moon', 'buy', 'long', 'bullish', 'squeeze', 'yolo', '🚀', '🟢']
+        bear_words = ['puts', 'short', 'bearish', 'dump', 'crash', 'puts', '🔴', '💀']
+
+        for post in posts:
+            data  = post.get('data', {})
+            title = (data.get('title', '') + ' ' + data.get('selftext', '')).lower()
+            if symbol.lower() in title or f'${symbol.lower()}' in title:
+                mentions += 1
+                bulls = sum(1 for w in bull_words if w in title)
+                bears = sum(1 for w in bear_words if w in title)
+                if bulls > bears:  bullish += 1
+                elif bears > bulls: bearish += 1
+
+        if mentions == 0:
+            return {'mention_count': 0, 'sentiment': 'neutral', 'score': 0.5}
+
+        bull_ratio = bullish / mentions if mentions else 0.5
+
+        # Contrarian scoring: extreme bearish = buy signal
+        if bull_ratio < 0.25 and mentions >= 3:
+            sentiment = 'contrarian_buy'
+            score     = 0.80
+        elif bull_ratio > 0.75 and mentions >= 5:
+            sentiment = 'crowded_long'
+            score     = 0.30   # fade the crowd
+        elif mentions >= 3:
+            sentiment = 'bullish' if bull_ratio > 0.5 else 'bearish'
+            score     = 0.55 if bull_ratio > 0.5 else 0.45
+        else:
+            sentiment = 'neutral'
+            score     = 0.50
+
+        return {
+            'mention_count': mentions,
+            'bullish':       bullish,
+            'bearish':       bearish,
+            'bull_ratio':    round(bull_ratio, 2),
+            'sentiment':     sentiment,
+            'score':         round(score, 2),
+        }
+    except Exception as e:
+        print(f"  [!] Reddit sentiment error for {symbol}: {e}")
+        return {'mention_count': 0, 'sentiment': 'neutral', 'score': 0.5}
 
 
 # ── Smoke Test ────────────────────────────────────────────────────────────────

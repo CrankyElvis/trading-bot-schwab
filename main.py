@@ -6,13 +6,14 @@ Weekends: watchlist prep only.
 
 Cycle order:
   1. Check market hours
-  2. Collect data snapshot
-  3. Evaluate regime
-  4. Manage cash parking
-  5. Risk check universe
-  6. Score flow momentum
-  7. Execute qualifying trades
-  8. Log cycle and sleep
+  2. Fetch VIX, term structure, regime
+  3. Portfolio load
+  4. Cash parking
+  5. Risk checks (9 blockers including volatility regime + circuit breaker)
+  6. Exit checks on existing positions
+  7. Watchlist candidates or live scoring
+  8. Execute equity trades + options signals
+  9. Log cycle and sleep
 """
 
 import time
@@ -24,13 +25,19 @@ import pytz
 from auth import authenticate
 from data_collector import (
     collect_snapshot, get_vix, get_vix_history,
-    get_price_history, get_quotes, DEFAULT_UNIVERSE,
+    get_vix_term_structure, get_price_history,
+    get_quotes, DEFAULT_UNIVERSE,
 )
 from regime_engine import evaluate_regime, print_regime_summary
 from cash_manager import evaluate_cash, get_parking_trades, print_parking_plan
 from risk_manager import run_risk_checks
-from flow_momentum import run_scoring_cycle, print_cycle_result
-from exit_manager import check_all_positions, print_exit_summary
+from flow_momentum import run_scoring_cycle, print_cycle_result, StockScore
+from pre_market_scanner import load_watchlist, get_watchlist_candidates
+from signal_exit_manager import (
+    check_signal_exits, print_signal_exit_summary,
+    enrich_position_metadata,
+)
+from options_manager import evaluate_options, print_options_summary, paper_buy_call, paper_sell_covered_call
 from paper_trader import (
     load_portfolio, paper_buy, paper_sell,
     print_portfolio_summary, estimate_fees,
@@ -38,15 +45,13 @@ from paper_trader import (
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-CYCLE_HOURS       = 4          # run every 4 hours
-MARKET_OPEN_H     = 9          # 9:30 ET
+CYCLE_HOURS       = 4
+MAX_CANDIDATES    = 4
+MARKET_OPEN_H     = 9
 MARKET_OPEN_M     = 30
-MARKET_CLOSE_H    = 16         # 4:00 ET
+MARKET_CLOSE_H    = 16
 ET                = pytz.timezone('America/New_York')
-
-# Position sizing: fraction of idle cash per trade (before regime scalar)
-BASE_POSITION_PCT = 0.20       # 20% of idle cash per position max
-
+BASE_POSITION_PCT = 0.20
 LOG_FILE          = 'bot_log.jsonl'
 
 
@@ -54,7 +59,7 @@ LOG_FILE          = 'bot_log.jsonl'
 
 def is_market_open() -> bool:
     now = datetime.now(ET)
-    if now.weekday() >= 5:   # Saturday=5, Sunday=6
+    if now.weekday() >= 5:
         return False
     if now.hour < MARKET_OPEN_H:
         return False
@@ -72,12 +77,13 @@ def is_weekend() -> bool:
 def next_open_str() -> str:
     now = datetime.now(ET)
     if now.weekday() < 5 and now.hour < MARKET_OPEN_H:
-        return f"today at 9:30 AM ET"
-    days_ahead = (7 - now.weekday()) % 7 or 1
+        return "today at 9:30 AM ET"
     if now.weekday() >= 5:
         days_ahead = (7 - now.weekday()) % 7
         if days_ahead == 0:
             days_ahead = 1
+    else:
+        days_ahead = 1
     return f"in ~{days_ahead} day(s)"
 
 
@@ -91,44 +97,29 @@ def log_cycle(data: dict):
 # ── Position Sizing ───────────────────────────────────────────────────────────
 
 def calc_position_size(idle_cash: float, regime_scalar: float, score: float) -> float:
-    """
-    Returns dollar amount to deploy in a single position.
-    idle_cash * BASE_POSITION_PCT * regime_scalar * score_boost
-    Score boost: score >= 0.90 gets 1.2x, else 1.0x
-    """
     score_boost = 1.2 if score >= 0.90 else 1.0
-    raw = idle_cash * BASE_POSITION_PCT * regime_scalar * score_boost
-    return round(raw, 2)
+    return round(idle_cash * BASE_POSITION_PCT * regime_scalar * score_boost, 2)
 
 
 # ── Trade Executor ────────────────────────────────────────────────────────────
 
 def execute_trades(client, candidates, regime_state, portfolio) -> list:
-    """
-    Executes buys for qualifying candidates.
-    Returns list of trade results.
-    """
-    results = []
+    results   = []
     idle_cash = portfolio.get('cash', 0)
 
     for candidate in candidates:
-        symbol      = candidate.symbol
-        score       = candidate.total_score
-        direction   = candidate.direction
+        symbol    = candidate.symbol
+        score     = candidate.total_score
+        direction = candidate.direction
 
         if direction == 'bearish' and regime_state.regime != 'crisis':
             print(f"  ⏭  Skipping {symbol} — bearish signal in non-crisis regime")
             continue
 
-        position_dollars = calc_position_size(
-            idle_cash,
-            regime_state.position_size,
-            score,
-        )
+        position_dollars = calc_position_size(idle_cash, regime_state.position_size, score)
 
-        # Get current price
         from data_collector import get_quote
-        q = get_quote(client, symbol)
+        q     = get_quote(client, symbol)
         price = q.get('last', 0)
         if price <= 0:
             print(f"  ⚠️  Could not get price for {symbol}, skipping")
@@ -136,11 +127,11 @@ def execute_trades(client, candidates, regime_state, portfolio) -> list:
 
         shares = int(position_dollars / price)
         if shares < 1:
-            print(f"  ⚠️  {symbol}: position size ${position_dollars:.0f} too small for 1 share @ ${price:.2f}")
+            print(f"  ⚠️  {symbol}: ${position_dollars:.0f} too small for 1 share @ ${price:.2f}")
             continue
 
         trade_value = shares * price
-        fees = estimate_fees(trade_value)
+        fees        = estimate_fees(trade_value)
 
         print(f"\n  📈 Entering {symbol}")
         print(f"     Score: {score:.3f}  |  Direction: {direction}")
@@ -148,16 +139,26 @@ def execute_trades(client, candidates, regime_state, portfolio) -> list:
         print(f"     Est. fees: ${fees['total_fees']:.2f}")
 
         success = paper_buy(client, symbol, shares)
+        if success:
+            # Store entry metadata for signal-based exit tracking
+            from paper_trader import load_portfolio, save_portfolio
+            pf = load_portfolio()
+            if symbol in pf.get('positions', {}):
+                pf['positions'][symbol] = enrich_position_metadata(
+                    position=pf['positions'][symbol],
+                    entry_score=score,
+                    entry_direction=direction,
+                    spy_history=get_price_history(client, 'SPY', days=30),
+                    price_history={symbol: get_price_history(client, symbol, days=30)},
+                    symbol=symbol,
+                )
+                save_portfolio(pf)
+
         results.append({
-            'symbol':    symbol,
-            'shares':    shares,
-            'price':     price,
-            'score':     score,
-            'success':   success,
+            'symbol': symbol, 'shares': shares, 'price': price,
+            'score': score, 'success': success,
             'timestamp': datetime.now().isoformat(),
         })
-
-        # Update idle cash for next iteration
         if success:
             idle_cash -= (trade_value + fees['total_fees'])
 
@@ -167,18 +168,13 @@ def execute_trades(client, candidates, regime_state, portfolio) -> list:
 # ── Cash Parking Executor ─────────────────────────────────────────────────────
 
 def execute_parking(client, plan, portfolio):
-    """
-    Executes cash parking trades (GLD, SCHP, VTIP, GDX).
-    Only trades if rebalance is needed.
-    """
     if not plan.needs_rebalance:
         print("  ✅ Cash parking already at target — no rebalance needed")
         return
 
-    from data_collector import get_quotes
     parking_tickers = [t.ticker for t in plan.targets]
-    quotes = get_quotes(client, parking_tickers)
-    trades = get_parking_trades(plan, portfolio.get('positions', {}), quotes)
+    quotes          = get_quotes(client, parking_tickers)
+    trades          = get_parking_trades(plan, portfolio.get('positions', {}), quotes)
 
     if not trades:
         print("  ✅ No parking trades needed")
@@ -191,7 +187,7 @@ def execute_parking(client, plan, portfolio):
             if shares >= 1:
                 paper_buy(client, tr['ticker'], shares)
         elif tr['action'] == 'sell':
-            pos = portfolio.get('positions', {}).get(tr['ticker'], {})
+            pos    = portfolio.get('positions', {}).get(tr['ticker'], {})
             shares = min(int(tr['dollars'] / tr['price']), pos.get('quantity', 0))
             if shares >= 1:
                 paper_sell(client, tr['ticker'], shares)
@@ -212,14 +208,22 @@ def run_cycle(client):
     if not market_open:
         print(f"  Next open: {next_open_str()}")
 
-    # ── Step 1: Fetch core data ───────────────────────────────────────────────
+    # ── Step 1: Core data ────────────────────────────────────────────────────
     print("\n📡 Fetching core data...")
     vixy     = get_vix(client)
     vix_hist = get_vix_history(client, days=30)
     print(f"  VIXY: {vixy:.2f}")
 
+    print("  Fetching VIX term structure...")
+    term_structure = get_vix_term_structure()
+    ts = term_structure.get
+    print(f"  Term structure: VIX9D={ts('vix9d',0):.1f}  "
+          f"VIX3M={ts('vix3m',0):.1f}  "
+          f"Signal={ts('signal','flat').upper()}"
+          f"{'  🛑 HALT ENTRIES' if ts('halt_entries',False) else ''}")
+
     # ── Step 2: Regime ────────────────────────────────────────────────────────
-    regime_state = evaluate_regime(vixy, vix_hist)
+    regime_state = evaluate_regime(vixy, vix_hist, term_structure)
     print_regime_summary(regime_state)
 
     if regime_state.in_pause:
@@ -233,19 +237,21 @@ def run_cycle(client):
     print(f"  💵 Cash: ${portfolio['cash']:,.2f}  |  "
           f"Positions: {len(portfolio.get('positions', {}))}")
 
-    # ── Step 4: Cash parking (always runs) ───────────────────────────────────
+    # ── Step 4: Cash parking ──────────────────────────────────────────────────
     print("\n🏦 Evaluating cash parking...")
-    spy_hist = get_price_history(client, 'SPY', days=30)
-    parking_plan = evaluate_cash(regime_state.regime, portfolio)
+    spy_hist        = get_price_history(client, 'SPY', days=30)
+    parking_tickers = ['GLD', 'SCHP', 'VTIP', 'GDX']
+    parking_quotes  = get_quotes(client, parking_tickers)
+    parking_plan    = evaluate_cash(regime_state.regime, portfolio, parking_quotes)
     print_parking_plan(parking_plan)
     execute_parking(client, parking_plan, portfolio)
-    portfolio = load_portfolio()   # reload after parking trades
+    portfolio = load_portfolio()
 
-    # ── Weekend: watchlist prep only, no trading ──────────────────────────────
+    # ── Weekend: watchlist prep only ──────────────────────────────────────────
     if weekend:
         print("\n📋 Weekend mode — building watchlist for Monday...")
         snapshot = collect_snapshot(client, DEFAULT_UNIVERSE)
-        result = run_scoring_cycle(
+        result   = run_scoring_cycle(
             universe=DEFAULT_UNIVERSE,
             snapshot=snapshot,
             regime=regime_state.regime,
@@ -256,16 +262,17 @@ def run_cycle(client):
             'event':      'weekend_watchlist',
             'regime':     regime_state.regime,
             'vixy':       vixy,
+            'term_signal': term_structure.get('signal', 'flat'),
             'candidates': [c.symbol for c in result.candidates],
             'timestamp':  cycle_start.isoformat(),
         })
         return
 
-    # ── Market closed on a weekday: pre-score only ────────────────────────────
+    # ── After hours weekday: pre-score only ───────────────────────────────────
     if not market_open:
         print("\n🌙 After hours — pre-scoring tomorrow's universe...")
         snapshot = collect_snapshot(client, DEFAULT_UNIVERSE)
-        result = run_scoring_cycle(
+        result   = run_scoring_cycle(
             universe=DEFAULT_UNIVERSE,
             snapshot=snapshot,
             regime=regime_state.regime,
@@ -283,11 +290,9 @@ def run_cycle(client):
 
     # ── Market open: full trading cycle ──────────────────────────────────────
     print("\n📊 Market open — running full trading cycle...")
-
-    # Collect full snapshot
     snapshot = collect_snapshot(client, DEFAULT_UNIVERSE)
 
-    # Risk check every symbol
+    # ── Step 5: Risk checks ───────────────────────────────────────────────────
     print("\n🛡️  Running risk checks...")
     passed_symbols = []
     for symbol in DEFAULT_UNIVERSE:
@@ -296,6 +301,8 @@ def run_cycle(client):
             portfolio=portfolio,
             spy_history_df=spy_hist,
             regime=regime_state.regime,
+            price_history=snapshot.get('price_history', {}),
+            term_structure=term_structure,
         )
         if result.passed:
             passed_symbols.append(symbol)
@@ -310,59 +317,158 @@ def run_cycle(client):
                    'timestamp': cycle_start.isoformat()})
         return
 
-    # ── Step: Check exits on existing positions ─────────────────────────────
-    print("\n🚪 Checking exit conditions...")
-    all_quotes = snapshot.get('quotes', {})
-    portfolio  = load_portfolio()
-    exit_signals = check_all_positions(portfolio, all_quotes, regime=regime_state.regime)
-    print_exit_summary(exit_signals)
+    # ── Step 6: Signal-based exit checks ────────────────────────────────────
+    print("\n🚪 Checking signal-based exit conditions...")
+    all_quotes   = snapshot.get('quotes', {})
+    portfolio    = load_portfolio()
+    price_hist   = snapshot.get('price_history', {})
+    uw_flow_frames = [df for df in snapshot.get('uw_flow', {}).values() if not df.empty]
+    import pandas as pd
+    combined_flow = pd.concat(uw_flow_frames, ignore_index=True) if uw_flow_frames else pd.DataFrame()
+    dp_df        = snapshot.get('uw_darkpool', pd.DataFrame())
 
-    for sig in exit_signals:
-        if sig.should_exit:
+    exit_results = check_signal_exits(
+        portfolio=portfolio,
+        quotes=all_quotes,
+        spy_history=spy_hist,
+        price_history=price_hist,
+        uw_flow_df=combined_flow,
+        dp_df=dp_df,
+        regime=regime_state.regime,
+    )
+    print_signal_exit_summary(exit_results)
+
+    for sig in exit_results:
+        if sig.covered_call_mode:
+            # Position is up 15-25% — sell covered call instead of exiting equity
+            pos = portfolio.get('positions', {}).get(sig.symbol, {})
+            qty = pos.get('quantity', 0)
+            if qty >= 100:
+                from options_manager import OptionsSignal, paper_sell_covered_call
+                cc_signal = OptionsSignal(
+                    symbol=sig.symbol,
+                    action='sell_covered_call',
+                    strike=sig.cc_strike,
+                    expiry=sig.cc_expiry,
+                    estimated_premium=sig.cc_est_premium,
+                    contracts=qty // 100,
+                    estimated_cost=-(sig.cc_est_premium * (qty // 100) * 100),
+                    reason=f"Covered call exit — position up {sig.current_pnl_pct:.1f}%",
+                )
+                print(f"  💰 CC EXIT: {sig.symbol} up {sig.current_pnl_pct:.1f}% "
+                      f"→ selling ${sig.cc_strike:.2f}C {sig.cc_expiry} "
+                      f"@ ~${sig.cc_est_premium:.2f}")
+                paper_sell_covered_call(cc_signal, portfolio)
+            else:
+                # Not enough shares for CC — hard sell instead
+                print(f"  ⚠️  {sig.symbol}: CC mode but <100 shares — hard selling")
+                paper_sell(client, sig.symbol, qty)
+
+        elif sig.should_exit:
             pos = portfolio.get('positions', {}).get(sig.symbol, {})
             qty = pos.get('quantity', 0)
             if qty > 0:
                 print(f"  🚨 Exiting {sig.symbol} — {sig.reason} "
-                      f"(P&L: {sig.current_pnl_pct:+.2f}%)")
+                      f"(P&L: {sig.current_pnl_pct:+.2f}%  "
+                      f"Score: {sig.entry_score:.3f}→{sig.current_score:.3f})")
                 paper_sell(client, sig.symbol, qty)
 
-    portfolio = load_portfolio()   # reload after exits
+    portfolio = load_portfolio()
 
-    # Score passing symbols
-    print("\n🔍 Running flow momentum scorer...")
-    score_result = run_scoring_cycle(
-        universe=passed_symbols,
-        snapshot=snapshot,
-        regime=regime_state.regime,
-    )
-    print_cycle_result(score_result)
+    # ── Step 7: Candidates from watchlist or live scoring ─────────────────────
+    print("\n🔍 Checking pre-market watchlist...")
+    watchlist    = load_watchlist()
+    trade_results = []
 
-    # Execute trades
-    if score_result.candidates:
-        print(f"\n💰 Executing {len(score_result.candidates)} trade(s)...")
-        portfolio = load_portfolio()
+    if watchlist:
+        print(f"  ✅ Watchlist from {watchlist.get('scanned_at','unknown')[:19]}")
+        print(f"  Scanned: {watchlist.get('symbols_scanned',0)}  "
+              f"Qualified: {watchlist.get('qualified',0)}")
+
+        wl_candidates = get_watchlist_candidates(min_score=0.75, max_n=20)
+        wl_candidates = [c for c in wl_candidates if c['symbol'] in passed_symbols]
+
+        if wl_candidates:
+            print(f"\n  🎯 {len(wl_candidates)} candidates passed risk checks:")
+            for c in wl_candidates[:MAX_CANDIDATES]:
+                print(f"    {c['symbol']:<8} score={c['score']:.3f}  "
+                      f"dir={c['direction']}  rsi={c.get('rsi',0):.1f}")
+
+            candidates = [
+                StockScore(
+                    symbol=c['symbol'],
+                    total_score=c['score'],
+                    signals=c.get('signals', {}),
+                    weighted=c.get('weighted', {}),
+                    qualifies=True,
+                    direction=c['direction'],
+                )
+                for c in wl_candidates[:MAX_CANDIDATES]
+            ]
+        else:
+            print("  ⏸  No watchlist candidates passed risk checks")
+            candidates = []
+    else:
+        print("  ⚠️  No watchlist — running live scoring...")
+        score_result = run_scoring_cycle(
+            universe=passed_symbols,
+            snapshot=snapshot,
+            regime=regime_state.regime,
+        )
+        print_cycle_result(score_result)
+        candidates = score_result.candidates
+
+    # ── Step 8: Execute equity trades ─────────────────────────────────────────
+    if candidates:
+        print(f"\n💰 Executing {len(candidates)} equity trade(s)...")
+        portfolio     = load_portfolio()
         trade_results = execute_trades(
             client=client,
-            candidates=score_result.candidates,
+            candidates=candidates,
             regime_state=regime_state,
             portfolio=portfolio,
         )
     else:
-        print("\n⏸  No qualifying trades — cash stays parked")
-        trade_results = []
+        print("\n⏸  No qualifying equity trades — cash stays parked")
 
-    # Final portfolio snapshot
+    # ── Step 9: Options signals ────────────────────────────────────────────────
+    print("\n🎯 Evaluating options signals...")
+    portfolio        = load_portfolio()
+    options_eval     = evaluate_options(
+        candidates=candidates,
+        portfolio=portfolio,
+        quotes=all_quotes,
+        vixy=vixy,
+        regime=regime_state.regime,
+    )
+    print_options_summary(options_eval)
+
+    # Execute long calls
+    for signal in options_eval.get('long_calls', []):
+        portfolio = load_portfolio()
+        pos = paper_buy_call(signal, portfolio, client)
+        if pos:
+            print(f"  ✅ Long call entered: {signal.symbol}")
+
+    # Execute covered calls
+    for signal in options_eval.get('covered_calls', []):
+        portfolio = load_portfolio()
+        pos = paper_sell_covered_call(signal, portfolio)
+        if pos:
+            print(f"  ✅ Covered call sold: {signal.symbol}")
+
+    # ── Final portfolio snapshot ───────────────────────────────────────────────
     print("\n📄 End-of-cycle portfolio:")
     print_portfolio_summary(client)
 
-    # Log cycle
     log_cycle({
         'event':         'trading_cycle',
         'regime':        regime_state.regime,
+        'term_signal':   term_structure.get('signal', 'flat'),
         'vixy':          vixy,
         'position_size': regime_state.position_size,
         'passed_risk':   len(passed_symbols),
-        'candidates':    [c.symbol for c in score_result.candidates],
+        'candidates':    [c.symbol for c in candidates],
         'trades':        trade_results,
         'timestamp':     cycle_start.isoformat(),
     })
@@ -374,7 +480,7 @@ def main():
     print("🤖 Trading bot starting up...")
     print(f"   Cycle interval:   {CYCLE_HOURS}h")
     print(f"   Min score:        0.75")
-    print(f"   Max candidates:   4")
+    print(f"   Max candidates:   {MAX_CANDIDATES}")
     print(f"   Base position:    {BASE_POSITION_PCT*100:.0f}% of idle cash")
     print(f"   Log file:         {LOG_FILE}")
 
@@ -406,14 +512,12 @@ def main():
             log_cycle({'event': 'error', 'error': str(e),
                        'timestamp': datetime.now().isoformat()})
 
-        sleep_seconds = CYCLE_HOURS * 3600
-        next_run = datetime.now(ET).strftime('%H:%M:%S')
         print(f"\n💤 Sleeping {CYCLE_HOURS}h — next cycle at "
-              f"{(datetime.now(ET).replace(hour=datetime.now(ET).hour)).strftime('%H:%M')} ET")
+              f"{datetime.now(ET).strftime('%H:%M')} ET")
         print("   (Press Ctrl+C to stop)")
 
         try:
-            time.sleep(sleep_seconds)
+            time.sleep(CYCLE_HOURS * 3600)
         except KeyboardInterrupt:
             print("\n\n🛑 Bot stopped by user.")
             break
