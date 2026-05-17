@@ -55,7 +55,7 @@ SCAN_UNIVERSE = [
 
     # ── Financials ─────────────────────────────────────────────────────────
     'JPM', 'GS', 'MS', 'BAC', 'WFC', 'C', 'BLK', 'SCHW',
-    'V', 'MA', 'AXP', 'COF', 'SQ', 'PYPL',
+    'V', 'MA', 'AXP', 'COF', 'PYPL',
 
     # ── Energy ─────────────────────────────────────────────────────────────
     'XOM', 'CVX', 'COP', 'EOG', 'SLB', 'OXY', 'MPC', 'VLO',

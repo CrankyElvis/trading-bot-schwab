@@ -835,6 +835,323 @@ def get_dp_thresholds_bulk(client, symbols: list) -> dict:
     """Returns {symbol: threshold} for multiple symbols."""
     return {s: get_dp_threshold(client, s) for s in symbols}
 
+
+# ── SEC EDGAR Form 4 (Real Insider Buying) ───────────────────────────────────
+
+def get_sec_form4(symbol: str, days: int = 30) -> dict:
+    """
+    Fetches real insider buying from SEC EDGAR full-text search.
+    Looks for Form 4 filings with Purchase (P) transaction codes.
+    Free, no API key required.
+
+    Returns:
+        {
+          'buy_count':    int,    # number of insider buy filings
+          'sell_count':   int,    # number of insider sell filings
+          'net_signal':   str,    # 'strong_buy' | 'buy' | 'neutral' | 'sell'
+          'score':        float,  # 0.0 - 1.0
+          'latest_date':  str,
+          'insiders':     list,   # names of buyers
+        }
+    """
+    try:
+        from datetime import datetime, timedelta
+        start_dt = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+        end_dt   = datetime.now().strftime('%Y-%m-%d')
+
+        url = 'https://efts.sec.gov/LATEST/search-index'
+        params = {
+            'q':        f'"{symbol}"',
+            'dateRange': 'custom',
+            'startdt':  start_dt,
+            'enddt':    end_dt,
+            'forms':    '4',
+        }
+        headers = {'User-Agent': 'trading-bot research@example.com'}
+        r = requests.get(url, params=params, headers=headers, timeout=10)
+
+        if r.status_code != 200:
+            return {'score': 0.0, 'net_signal': 'neutral', 'buy_count': 0, 'sell_count': 0}
+
+        hits     = r.json().get('hits', {}).get('hits', [])
+        buys     = 0
+        sells    = 0
+        insiders = []
+
+        for hit in hits[:20]:
+            src   = hit.get('_source', {})
+            # Form 4 period_of_report or filed date
+            filed = src.get('period_of_report', src.get('file_date', ''))
+            name  = src.get('display_names', [''])[0] if src.get('display_names') else ''
+
+            # Heuristic: check for buy/sell indicators in filing text
+            snippet = str(src).lower()
+            if any(w in snippet for w in ['purchase', 'acquired', 'bought']):
+                buys += 1
+                if name: insiders.append(name)
+            elif any(w in snippet for w in ['sale', 'sold', 'disposed']):
+                sells += 1
+
+        net = buys - sells
+        if net >= 3:   signal, score = 'strong_buy', 1.00
+        elif net == 2: signal, score = 'buy',        0.75
+        elif net == 1: signal, score = 'buy',        0.50
+        elif net == 0: signal, score = 'neutral',    0.25
+        else:          signal, score = 'sell',       0.00
+
+        return {
+            'score':      score,
+            'net_signal': signal,
+            'buy_count':  buys,
+            'sell_count': sells,
+            'insiders':   insiders[:3],
+        }
+
+    except Exception as e:
+        return {'score': 0.0, 'net_signal': 'neutral', 'buy_count': 0,
+                'sell_count': 0, 'error': str(e)}
+
+
+# ── Reddit WSB Sentiment ──────────────────────────────────────────────────────
+
+def get_reddit_wsb_sentiment(symbol: str) -> dict:
+    """
+    Fetches Reddit WallStreetBets sentiment for a symbol.
+    Uses Reddit's free public JSON API — no key required.
+
+    Contrarian signal logic:
+      High bearish mentions  → potential buy (crowd is wrong)
+      High bullish mentions  → caution (crowded trade)
+      Low/no mentions        → neutral
+
+    Returns:
+        {
+          'mention_count': int,
+          'bull_ratio':    float,  # 0-1
+          'sentiment':     str,    # 'contrarian_buy'|'crowded'|'bullish'|'bearish'|'neutral'
+          'score':         float,  # 0-1
+        }
+    """
+    try:
+        headers = {'User-Agent': 'trading-bot/2.0'}
+        url     = 'https://www.reddit.com/r/wallstreetbets/search.json'
+        params  = {'q': symbol, 'sort': 'new', 'limit': 50, 't': 'day'}
+
+        r = requests.get(url, headers=headers, params=params, timeout=8)
+        if r.status_code != 200:
+            return {'mention_count': 0, 'sentiment': 'neutral', 'score': 0.5, 'bull_ratio': 0.5}
+
+        posts    = r.json().get('data', {}).get('children', [])
+        mentions = 0
+        bullish  = 0
+        bearish  = 0
+
+        bull_words = {'calls', 'moon', 'buy', 'long', 'bullish', 'squeeze',
+                      'yolo', 'rocket', 'bull', 'green', 'pump'}
+        bear_words = {'puts', 'short', 'bearish', 'dump', 'crash', 'bear',
+                      'red', 'sell', 'fade', 'drill'}
+
+        for post in posts:
+            data  = post.get('data', {})
+            title = (data.get('title','') + ' ' + data.get('selftext','')).lower()
+            sym_l = symbol.lower()
+
+            if sym_l in title or f'${sym_l}' in title:
+                mentions += 1
+                b = sum(1 for w in bull_words if w in title)
+                s = sum(1 for w in bear_words if w in title)
+                if b > s:   bullish += 1
+                elif s > b: bearish += 1
+
+        if mentions == 0:
+            return {'mention_count': 0, 'sentiment': 'neutral', 'score': 0.5, 'bull_ratio': 0.5}
+
+        bull_ratio = bullish / mentions
+
+        # Contrarian scoring
+        if bull_ratio < 0.25 and mentions >= 3:
+            sentiment, score = 'contrarian_buy', 0.80  # crowd is bearish = buy signal
+        elif bull_ratio > 0.75 and mentions >= 5:
+            sentiment, score = 'crowded',        0.30  # crowded long = fade signal
+        elif bull_ratio >= 0.5:
+            sentiment, score = 'bullish',        0.60
+        elif mentions >= 2:
+            sentiment, score = 'bearish',        0.40
+        else:
+            sentiment, score = 'neutral',        0.50
+
+        return {
+            'mention_count': mentions,
+            'bull_ratio':    round(bull_ratio, 2),
+            'bullish':       bullish,
+            'bearish':       bearish,
+            'sentiment':     sentiment,
+            'score':         round(score, 2),
+        }
+
+    except Exception as e:
+        return {'mention_count': 0, 'sentiment': 'neutral', 'score': 0.5,
+                'bull_ratio': 0.5, 'error': str(e)}
+
+
+# ── Congressional Trading (House + Senate Stock Watcher — Free) ──────────────
+# Sources:
+#   House: S3 bulk JSON (updated when available, historical)
+#   Senate: senatestockwatcher.com/api (live, no auth required)
+#
+# Key insight from research: cluster signals beat individual trades.
+# 3+ members buying the same ticker within 14 days = strong signal.
+# Sales from multiple members = leading indicator for bad news.
+# 45-day filing window means recent fast-filers are most actionable.
+
+_congress_cache: dict = {}   # session cache to avoid re-fetching bulk files
+_congress_cache_ts: float = 0.0
+
+def _fetch_congress_bulk() -> list:
+    """
+    Fetches and caches combined House + Senate congressional trade data.
+    House: S3 bulk JSON  (last available snapshot)
+    Senate: senatestockwatcher.com live JSON API
+    Returns combined list of trade dicts.
+    """
+    global _congress_cache, _congress_cache_ts
+    import time as _time
+
+    # Re-use cache for 4 hours
+    if _congress_cache and (_time.time() - _congress_cache_ts) < 14400:
+        return _congress_cache.get('trades', [])
+
+    all_trades = []
+
+    # Senate — live API, clean JSON, no auth
+    try:
+        senate_url = 'https://senatestockwatcher.com/api'
+        r = requests.get(senate_url, timeout=12,
+                         headers={'User-Agent': 'trading-bot/2.0'})
+        if r.status_code == 200:
+            data = r.json()
+            # Senate API returns list of senator objects with transactions array
+            if isinstance(data, list):
+                for senator in data:
+                    txns = senator.get('transactions', [])
+                    name = f"{senator.get('first_name','')} {senator.get('last_name','')}".strip()
+                    for tx in txns:
+                        tx['representative'] = name
+                        tx['chamber']        = 'senate'
+                        all_trades.append(tx)
+            elif isinstance(data, dict) and 'transactions' in data:
+                # Some endpoints return flat list
+                for tx in data['transactions']:
+                    tx['chamber'] = 'senate'
+                    all_trades.append(tx)
+    except Exception as e:
+        pass   # Senate unavailable — fall through to house data
+
+    # House — S3 bulk JSON (historical, updated periodically)
+    try:
+        house_url = ('https://house-stock-watcher-data.s3-us-west-2'
+                     '.amazonaws.com/data/all_transactions.json')
+        r = requests.get(house_url, timeout=15,
+                         headers={'User-Agent': 'trading-bot/2.0'})
+        if r.status_code == 200:
+            house_trades = r.json()
+            for tx in house_trades:
+                tx['chamber'] = 'house'
+            all_trades.extend(house_trades)
+    except Exception as e:
+        pass
+
+    _congress_cache    = {'trades': all_trades}
+    _congress_cache_ts = _time.time()
+    return all_trades
+
+
+def get_congress_trades(symbol: str, days: int = 90) -> dict:
+    """
+    Returns congressional trading signal for a symbol.
+    Covers both House and Senate — free, no API key required.
+
+    Scoring logic:
+      3+ members buying within 14 days  → strong_buy  1.0  (cluster signal)
+      2 members buying                  → buy         0.75
+      1 member buying                   → buy         0.50
+      0 net activity                    → neutral     0.25
+      net sellers                       → sell        0.10
+
+    Returns:
+        {
+          'score':       float,
+          'net_signal':  str,
+          'buy_count':   int,
+          'sell_count':  int,
+          'cluster_14d': int,   # buys in last 14 days (cluster signal)
+          'politicians': list,
+          'chambers':    list,
+        }
+    """
+    try:
+        from datetime import datetime, timedelta
+        all_trades = _fetch_congress_bulk()
+        if not all_trades:
+            return {'score': 0.0, 'net_signal': 'no_data',
+                    'buy_count': 0, 'sell_count': 0}
+
+        cutoff_90d = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+        cutoff_14d = (datetime.now() - timedelta(days=14)).strftime('%Y-%m-%d')
+
+        sym_upper = symbol.upper()
+        buys_90d  = []
+        sells_90d = []
+        buys_14d  = []
+
+        for tx in all_trades:
+            # Normalize ticker field — both APIs use 'ticker'
+            ticker = str(tx.get('ticker', tx.get('asset_ticker', ''))).upper().strip()
+            if ticker != sym_upper or ticker == '--':
+                continue
+
+            tx_date = tx.get('transaction_date', tx.get('date_recieved', ''))
+            if not tx_date or tx_date < cutoff_90d:
+                continue
+
+            tx_type = str(tx.get('type', tx.get('transaction_type', ''))).lower()
+            name    = tx.get('representative', tx.get('name', 'Unknown'))
+
+            if 'purchase' in tx_type or 'buy' in tx_type:
+                buys_90d.append({'name': name, 'date': tx_date,
+                                  'chamber': tx.get('chamber', 'unknown')})
+                if tx_date >= cutoff_14d:
+                    buys_14d.append(name)
+            elif 'sale' in tx_type or 'sell' in tx_type or 'exchange' in tx_type:
+                sells_90d.append({'name': name, 'date': tx_date})
+
+        cluster = len(set(buys_14d))   # unique members buying in 14d
+        net     = len(buys_90d) - len(sells_90d)
+
+        if cluster >= 3:   signal, score = 'strong_buy', 1.00
+        elif cluster == 2: signal, score = 'buy',        0.80
+        elif net >= 2:     signal, score = 'buy',        0.65
+        elif net == 1:     signal, score = 'buy',        0.50
+        elif net == 0:     signal, score = 'neutral',    0.25
+        else:              signal, score = 'sell',       0.10
+
+        politicians = list({t['name'] for t in buys_90d})[:4]
+        chambers    = list({t.get('chamber','') for t in buys_90d})
+
+        return {
+            'score':       score,
+            'net_signal':  signal,
+            'buy_count':   len(buys_90d),
+            'sell_count':  len(sells_90d),
+            'cluster_14d': cluster,
+            'politicians': politicians,
+            'chambers':    chambers,
+        }
+
+    except Exception as e:
+        return {'score': 0.0, 'net_signal': 'error',
+                'buy_count': 0, 'sell_count': 0, 'error': str(e)}
+
 # ── Smoke Test ────────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':

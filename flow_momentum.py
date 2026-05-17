@@ -59,23 +59,25 @@ def get_max_candidates(portfolio_value: float) -> int:
         if portfolio_value >= threshold:
             return candidates
     return 4
-MIN_SIGNALS_FIRING  = 3       # at least 3 signals must score > 0.30
+MIN_SIGNALS_FIRING  = 3       # at least 3 of 10 signals must score > 0.30
 MIN_SWEEP_PREMIUM   = 500_000 # minimum UW sweep premium to count ($500k)
 REQUIRE_DIRECTION   = True    # only enter bullish signals in flow/neutral
 
 WEIGHTS = {
-    'sweep_flow':    0.10,   # reduced — consistently negative edge in backtests
-    'dark_pool':     0.10,   # reduced — edge was minimal as proxy signal
-    'politician':    0.05,   # minimal — dead weight until real data added
-    'insider':       0.05,   # minimal — dead weight until SEC EDGAR added
-    'price_rvol':    0.05,   # reduced — negative edge in backtest
-    'gex':           0.03,   # minimal — weak proxy signal
-    'market_tide':   0.32,   # ⬆️ massively increased — highest edge +0.050
-    'sector_tide':   0.27,   # ⬆️ massively increased — second highest edge +0.056
-    'etf_flow':      0.03,   # minimal — negative edge in backtest
+    'sweep_flow':    0.10,   # UW options sweep flow
+    'dark_pool':     0.10,   # UW dark pool prints
+    'politician':    0.08,   # ⬆️ Quiver congressional trading (real data now)
+    'insider':       0.08,   # ⬆️ SEC EDGAR Form 4 (real data now)
+    'price_rvol':    0.05,   # price + relative volume
+    'gex':           0.03,   # gamma exposure proxy
+    'market_tide':   0.28,   # SPY EMA trend
+    'sector_tide':   0.23,   # sector ETF trend
+    'etf_flow':      0.03,   # ETF volume flow
+    'reddit_wsb':    0.02,   # Reddit WSB contrarian sentiment (new)
 }
 # Note: weights sum to 1.0
-# market_tide + sector_tide now dominate (59%) — confirmed best predictors
+# market_tide + sector_tide dominate (51%) — confirmed best predictors
+# politician + insider now have real data — weights raised from 0.05 to 0.08
 
 assert abs(sum(WEIGHTS.values()) - 1.0) < 0.001, "Weights must sum to 1.0"
 
@@ -703,9 +705,7 @@ def print_cycle_result(result: CycleResult):
     print(f"  Cycle time:     {result.cycle_time[:19]}")
     print(f"  Stocks scored:  {len(result.all_scores)}")
     print(f"  Signals fired:  {result.signals_fired}")
-    max_shown = dynamic_max if portfolio_value > 0 else MAX_CANDIDATES
-    print(f"  Threshold:      {MIN_SCORE}  |  Max picks: {max_shown}"
-          f"{'  (scaled)' if max_shown != MAX_CANDIDATES else ''}")
+    print(f"  Threshold:      {MIN_SCORE}  |  Max picks: {MAX_CANDIDATES}")
     print(f"\n  {'Symbol':<8} {'Score':>6}  {'Dir':<10} {'Qualifies'}")
     print(f"  {'-'*40}")
     for s in result.all_scores[:10]:   # show top 10

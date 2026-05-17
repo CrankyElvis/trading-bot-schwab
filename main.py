@@ -45,14 +45,28 @@ from paper_trader import (
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-CYCLE_HOURS       = 4
 MAX_CANDIDATES    = 4
-MARKET_OPEN_H     = 9
-MARKET_OPEN_M     = 30
-MARKET_CLOSE_H    = 16
-ET                = pytz.timezone('America/New_York')
 BASE_POSITION_PCT = 0.20
 LOG_FILE          = 'bot_log.jsonl'
+ET                = pytz.timezone('America/New_York')
+
+# ── Named Trading Schedule (ET) ───────────────────────────────────────────────
+# Each entry: (hour, minute, cycle_name, action)
+# Actions: 'premarket_scan' | 'trade' | 'exit_only' | 'after_hours'
+SCHEDULE = [
+    ( 6,  0, 'premarket',    'premarket_scan'),  # 6:00am — full 141-symbol scan
+    ( 9, 25, 'pre_open',     'trade'),            # 9:25am — load watchlist, ready to fire
+    ( 9, 35, 'open',         'trade'),            # 9:35am — first settled cycle
+    (11, 30, 'mid_morning',  'trade'),            # 11:30am — late morning momentum
+    (13, 30, 'midday',       'trade'),            # 1:30pm  — post-lunch repositioning
+    (15,  0, 'power_hour',   'trade'),            # 3:00pm  — institutional end-of-day flow
+    (16,  5, 'close',        'exit_only'),        # 4:05pm  — exit checks, CC evaluation
+    (18,  0, 'after_hours',  'after_hours'),      # 6:00pm  — log P&L, overnight prep
+]
+
+MARKET_OPEN_H  = 9
+MARKET_OPEN_M  = 30
+MARKET_CLOSE_H = 16
 
 
 # ── Market Hours ──────────────────────────────────────────────────────────────
@@ -85,6 +99,66 @@ def next_open_str() -> str:
     else:
         days_ahead = 1
     return f"in ~{days_ahead} day(s)"
+
+
+def get_next_cycle() -> tuple:
+    """
+    Returns (seconds_until_next, cycle_name, action) for the next scheduled cycle.
+    On weekends, sleeps until Monday 6:00am ET.
+    """
+    now = datetime.now(ET)
+
+    # Weekend — sleep until Monday 6am
+    if now.weekday() >= 5:
+        days_until_monday = (7 - now.weekday()) % 7
+        if days_until_monday == 0:
+            days_until_monday = 7
+        monday_6am = now.replace(hour=6, minute=0, second=0, microsecond=0)
+        monday_6am += timedelta(days=days_until_monday)
+        wait = (monday_6am - now).total_seconds()
+        return wait, 'monday_open', 'premarket_scan'
+
+    # Weekday — find next scheduled slot
+    today_slots = []
+    for h, m, name, action in SCHEDULE:
+        slot_dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
+        if slot_dt > now:
+            today_slots.append((slot_dt, name, action))
+
+    if today_slots:
+        next_dt, name, action = today_slots[0]
+        wait = (next_dt - now).total_seconds()
+        return wait, name, action
+
+    # All slots passed today — wait until tomorrow 6am
+    tomorrow_6am = (now + timedelta(days=1)).replace(
+        hour=6, minute=0, second=0, microsecond=0
+    )
+    # Skip to Monday if tomorrow is weekend
+    while tomorrow_6am.weekday() >= 5:
+        tomorrow_6am += timedelta(days=1)
+    wait = (tomorrow_6am - now).total_seconds()
+    return wait, 'premarket', 'premarket_scan'
+
+
+def get_current_cycle() -> tuple:
+    """
+    Returns (cycle_name, action) for the current moment.
+    Used to determine what type of cycle to run right now.
+    """
+    now = datetime.now(ET)
+
+    if now.weekday() >= 5:
+        return 'weekend', 'weekend'
+
+    # Find most recent past slot
+    last_name, last_action = 'overnight', 'sleep'
+    for h, m, name, action in SCHEDULE:
+        slot_dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
+        if slot_dt <= now:
+            last_name, last_action = name, action
+
+    return last_name, last_action
 
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -196,15 +270,19 @@ def execute_parking(client, plan, portfolio):
 # ── Single Cycle ──────────────────────────────────────────────────────────────
 
 def run_cycle(client):
-    cycle_start = datetime.now()
+    cycle_start              = datetime.now()
+    cycle_name, cycle_action = get_current_cycle()
+
     print(f"\n{'='*60}")
-    print(f"  🤖 BOT CYCLE  —  {cycle_start.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"  🤖 BOT CYCLE [{cycle_name.upper()}]  —  "
+          f"{cycle_start.strftime('%Y-%m-%d %H:%M:%S ET')}")
     print(f"{'='*60}")
 
     market_open = is_market_open()
     weekend     = is_weekend()
 
-    print(f"  Market open: {'✅ YES' if market_open else '❌ NO'}")
+    print(f"  Market open: {'✅ YES' if market_open else '❌ NO'}  "
+          f"| Cycle: {cycle_name}  | Action: {cycle_action}")
     if not market_open:
         print(f"  Next open: {next_open_str()}")
 
@@ -247,6 +325,46 @@ def run_cycle(client):
     execute_parking(client, parking_plan, portfolio)
     portfolio = load_portfolio()
 
+    # ── Pre-market scan (6:00am) ─────────────────────────────────────────────
+    if cycle_action == 'premarket_scan' and not weekend:
+        print("\n🌅 Pre-market scan — scoring full 141-symbol universe...")
+        from pre_market_scanner import run_scan
+        run_scan(client)
+        log_cycle({'event': 'premarket_scan', 'regime': regime_state.regime,
+                   'timestamp': cycle_start.isoformat()})
+        return
+
+    # ── Exit-only cycle (4:05pm close) ────────────────────────────────────────
+    if cycle_action == 'exit_only':
+        print("\n🔔 Close cycle — checking exits and options...")
+        portfolio    = load_portfolio()
+        all_quotes   = get_quotes(client, list(portfolio.get('positions', {}).keys()))
+        exit_results = check_signal_exits(
+            portfolio=portfolio, quotes=all_quotes,
+            spy_history=get_price_history(client, 'SPY', days=30),
+            price_history={}, uw_flow_df=pd.DataFrame(),
+            dp_df=pd.DataFrame(), regime=regime_state.regime,
+        )
+        print_signal_exit_summary(exit_results)
+        for sig in exit_results:
+            if sig.should_exit:
+                pos = portfolio.get('positions', {}).get(sig.symbol, {})
+                qty = pos.get('quantity', 0)
+                if qty > 0:
+                    paper_sell(client, sig.symbol, qty)
+        log_cycle({'event': 'exit_only_cycle', 'regime': regime_state.regime,
+                   'timestamp': cycle_start.isoformat()})
+        return
+
+    # ── After-hours (6:00pm) ──────────────────────────────────────────────────
+    if cycle_action == 'after_hours':
+        print("\n🌙 After-hours — logging P&L and overnight prep...")
+        portfolio = load_portfolio()
+        print_portfolio_summary(client)
+        log_cycle({'event': 'after_hours', 'regime': regime_state.regime,
+                   'timestamp': cycle_start.isoformat()})
+        return
+
     # ── Weekend: watchlist prep only ──────────────────────────────────────────
     if weekend:
         print("\n📋 Weekend mode — building watchlist for Monday...")
@@ -270,7 +388,7 @@ def run_cycle(client):
         })
         return
 
-    # ── After hours weekday: pre-score only ───────────────────────────────────
+    # ── Pre-open or after hours: pre-score only ──────────────────────────────
     if not market_open:
         print("\n🌙 After hours — pre-scoring tomorrow's universe...")
         snapshot = collect_snapshot(client, DEFAULT_UNIVERSE)
@@ -537,12 +655,15 @@ def main():
             log_cycle({'event': 'error', 'error': str(e),
                        'timestamp': datetime.now().isoformat()})
 
-        print(f"\n💤 Sleeping {CYCLE_HOURS}h — next cycle at "
-              f"{datetime.now(ET).strftime('%H:%M')} ET")
+        wait_sec, next_name, next_action = get_next_cycle()
+        next_dt = datetime.now(ET) + timedelta(seconds=wait_sec)
+        print(f"\n💤 Next cycle: {next_name.upper()} ({next_action}) "
+              f"at {next_dt.strftime('%I:%M %p ET')} "
+              f"(in {int(wait_sec//3600)}h {int((wait_sec%3600)//60)}m)")
         print("   (Press Ctrl+C to stop)")
 
         try:
-            time.sleep(CYCLE_HOURS * 3600)
+            time.sleep(wait_sec)
         except KeyboardInterrupt:
             print("\n\n🛑 Bot stopped by user.")
             break

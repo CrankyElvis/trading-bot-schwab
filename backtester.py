@@ -57,9 +57,10 @@ try:
 except Exception:
     def get_max_candidates(v): return 4
     CURRENT_WEIGHTS = {
-        'sweep_flow':  0.10, 'dark_pool':   0.10, 'politician': 0.05,
-        'insider':     0.05, 'price_rvol':  0.05, 'gex':        0.03,
-        'market_tide': 0.32, 'sector_tide': 0.27, 'etf_flow':   0.03,
+        'sweep_flow':  0.10, 'dark_pool':   0.10, 'politician': 0.08,
+        'insider':     0.08, 'price_rvol':  0.05, 'gex':        0.03,
+        'market_tide': 0.28, 'sector_tide': 0.23, 'etf_flow':   0.03,
+        'reddit_wsb':  0.02,
     }
 
 PARKING_ALLOC = {
@@ -163,10 +164,99 @@ def get_size_scalar(vix: float) -> float:
 
 # ── Data Fetcher ──────────────────────────────────────────────────────────────
 
-def fetch_all_history(client, tickers: list) -> dict:
-    """Fetches maximum available price history from Schwab (~2 years)."""
+def fetch_yfinance(tickers: list, years: int = 5) -> dict:
+    """
+    Fetches up to 5 years of daily OHLCV from Yahoo Finance.
+    Free, no API key, no rate limits for daily data.
+    Returns {ticker: DataFrame} with columns: open, high, low, close, volume
+    indexed by datetime.
+    """
+    try:
+        import yfinance as yf
+    except ImportError:
+        print("  ⚠️  yfinance not installed — run: pip install yfinance")
+        return {}
+
+    print(f"\n📥 Fetching {years}yr history from Yahoo Finance ({len(tickers)} tickers)...")
+    history  = {}
+    period   = f"{years}y"
+    failed   = []
+
+    # Batch download is much faster than individual downloads
+    batch_size = 50
+    for i in range(0, len(tickers), batch_size):
+        batch = tickers[i:i+batch_size]
+        try:
+            raw = yf.download(
+                batch,
+                period=period,
+                interval='1d',
+                auto_adjust=True,
+                progress=False,
+                threads=True,
+            )
+            if raw.empty:
+                failed.extend(batch)
+                continue
+
+            # yfinance multi-ticker returns MultiIndex columns: (field, ticker)
+            if isinstance(raw.columns, pd.MultiIndex):
+                for ticker in batch:
+                    try:
+                        df = raw.xs(ticker, level=1, axis=1).copy()
+                        df.columns = [c.lower() for c in df.columns]
+                        df.index   = pd.to_datetime(df.index)
+                        df.index.name = 'datetime'
+                        df = df.dropna(subset=['close'])
+                        if not df.empty:
+                            history[ticker] = df
+                    except Exception:
+                        failed.append(ticker)
+            else:
+                # Single ticker — columns are just field names
+                ticker = batch[0]
+                df = raw.copy()
+                df.columns = [c.lower() for c in df.columns]
+                df.index   = pd.to_datetime(df.index)
+                df.index.name = 'datetime'
+                df = df.dropna(subset=['close'])
+                if not df.empty:
+                    history[ticker] = df
+
+        except Exception as e:
+            print(f"  ⚠️  Batch {i//batch_size+1} error: {e}")
+            failed.extend(batch)
+
+    # Report
+    fetched = sorted(history.keys())
+    for t in fetched:
+        df = history[t]
+        print(f"  ✅ {t}: {len(df)} days  ({df.index[0].date()} → {df.index[-1].date()})")
+    if failed:
+        print(f"  ⚠️  Failed: {failed}")
+
+    print(f"\n  📊 Fetched {len(history)}/{len(tickers)} tickers via Yahoo Finance")
+    return history
+
+
+def fetch_all_history(client, tickers: list, use_yfinance: bool = True, years: int = 5) -> dict:
+    """
+    Fetches price history. 
+    Primary:  Yahoo Finance (5 years, free, fast batch download)
+    Fallback: Schwab API  (~2 years, slower)
+    """
+    if use_yfinance:
+        try:
+            history = fetch_yfinance(tickers, years=years)
+            if history:
+                return history
+            print("  ⚠️  Yahoo Finance returned no data — falling back to Schwab")
+        except Exception as e:
+            print(f"  ⚠️  Yahoo Finance error: {e} — falling back to Schwab")
+
+    # Schwab fallback
     from data_collector import get_price_history
-    print(f"\n📥 Fetching price history for {len(tickers)} tickers...")
+    print(f"\n📥 Fetching price history from Schwab ({len(tickers)} tickers)...")
     history = {}
     for ticker in tickers:
         df = get_price_history(client, ticker, days=730)
@@ -175,7 +265,7 @@ def fetch_all_history(client, tickers: list) -> dict:
             continue
         df = df.set_index('datetime')
         history[ticker] = df
-        print(f"  ✅ {ticker}: {len(df)} days  ({df.index[0].date()} → {df.index[-1].date()})")
+        print(f"  ✅ {ticker}: {len(df)} days")
         time.sleep(0.15)
     return history
 
@@ -220,12 +310,28 @@ def score_symbol(symbol, date, history, spy_hist, vix) -> tuple:
     else:                            s2 = 0.0
     signals['dark_pool'] = s2
 
-    # 3 & 4: not available historically
-    signals['politician'] = 0.0
-    signals['insider']    = 0.0
+    # Signal 3: politician proxy — simulate cluster buying using price momentum
+    # Real data: House+Senate Stock Watcher (live bot)
+    # Backtest proxy: strong price momentum on high volume = institutional cluster signal
+    mom20 = (closes.iloc[-1] - closes.iloc[-21]) / closes.iloc[-21] if len(closes) >= 21 else 0
+    if mom20 > 0.08 and rvol >= 1.5:   s3 = 1.00   # strong 20d momentum + volume = cluster proxy
+    elif mom20 > 0.04 and rvol >= 1.2: s3 = 0.60
+    elif mom20 > 0.02:                 s3 = 0.30
+    else:                              s3 = 0.00
+    signals['politician'] = s3
+
+    # Signal 4: insider proxy — SEC EDGAR Form 4 (live bot)
+    # Backtest proxy: price breaking above 50d EMA with volume = smart money entry proxy
+    ema20_val = closes.ewm(span=20, adjust=False).mean().iloc[-1]
+    ema50     = closes.ewm(span=50, adjust=False).mean().iloc[-1] if len(closes) >= 50 else ema20_val
+    if closes.iloc[-1] > ema50 * 1.05 and rvol >= 1.5: s4 = 1.00
+    elif closes.iloc[-1] > ema50 * 1.02:               s4 = 0.60
+    elif closes.iloc[-1] > ema50:                      s4 = 0.30
+    else:                                              s4 = 0.00
+    signals['insider'] = s4
 
     # 5. price_rvol
-    ema20 = closes.ewm(span=20, adjust=False).mean().iloc[-1]
+    ema20 = ema20_val  # already computed above
     s5    = 0.0
     if closes.iloc[-1] > ema20 * 1.02: s5 += 0.60
     elif closes.iloc[-1] > ema20:       s5 += 0.30
@@ -267,8 +373,21 @@ def score_symbol(symbol, date, history, spy_hist, vix) -> tuple:
         s9     = 1.0 if older > 0 and recent / older > 1.2 else 0.0
     signals['etf_flow'] = s9
 
-    # Weighted total
-    total = sum(signals[k] * CURRENT_WEIGHTS[k] for k in CURRENT_WEIGHTS)
+    # Signal 10: reddit_wsb proxy — contrarian sentiment via intraday volatility
+    # Real data: Reddit WSB JSON API (live bot)
+    # Backtest proxy: high intraday range on volume spike = retail attention
+    # Contrarian: if we have a dip with high volume, score higher (potential squeeze)
+    day_range_pct = (past['high'].iloc[-1] - past['low'].iloc[-1]) / closes.iloc[-1]
+    if day_range_pct > 0.04 and rvol > 2.0 and mom5 < 0:
+        s10 = 0.80   # high vol dip = contrarian buy (retail panic)
+    elif day_range_pct > 0.02 and rvol > 1.5:
+        s10 = 0.60   # elevated activity
+    else:
+        s10 = 0.40   # below-average attention
+    signals['reddit_wsb'] = s10
+
+    # Weighted total — only sum signals that exist in CURRENT_WEIGHTS
+    total = sum(signals.get(k, 0) * CURRENT_WEIGHTS[k] for k in CURRENT_WEIGHTS)
 
     # Fear & Greed modifier via real VIX
     if vix > 35:   total *= 1.25   # extreme fear = contrarian boost
@@ -475,8 +594,9 @@ class BacktestPortfolio:
                         elif rvol >= 1.2:                curr_score += 0.20
                         if closes.iloc[-1] > ema20:      curr_score += 0.30
                         if rvol >= 2.0:                  curr_score += 0.20
-                        entry_score = pos.signals.get('entry_score', 0.75)
-                        if curr_score < 0.40 or (entry_score > 0 and curr_score < entry_score * 0.50):
+                        curr_score = min(curr_score, 1.0)
+                        entry_score = pos.signals.get('entry_score', 0.50)
+                        if curr_score < 0.35 or (entry_score > 0 and curr_score < entry_score * 0.45):
                             exits.append((symbol, price, 'score_decay'))
                             continue
 
@@ -518,13 +638,13 @@ class BacktestPortfolio:
 
 # ── Backtest Loop ─────────────────────────────────────────────────────────────
 
-def run_backtest(client, start=None, end=None, capital=STARTING_CAPITAL) -> dict:
+def run_backtest(client, start=None, end=None, capital=STARTING_CAPITAL, years=5) -> dict:
 
     # Fetch VIX first
     vix_df = fetch_vix_history()
 
-    # Fetch price history
-    history  = fetch_all_history(client, ALL_TICKERS)
+    # Fetch price history — Yahoo Finance gives 5 years vs Schwab's 2
+    history  = fetch_all_history(client, ALL_TICKERS, use_yfinance=True, years=years)
     spy_hist = history.get('SPY', pd.DataFrame())
     if spy_hist.empty:
         print("❌ No SPY data")
@@ -543,7 +663,7 @@ def run_backtest(client, start=None, end=None, capital=STARTING_CAPITAL) -> dict
                            if actual_start <= d <= actual_end])
 
     print(f"\n{'='*62}")
-    print(f"  BACKTESTER v3  (signal exits, CSP simulation, dynamic candidates, volatility block)")
+    print(f"  BACKTESTER v5  (Yahoo Finance 5yr, 10 signals, congressional+insider+reddit, CSP)")
     print(f"  Period:  {actual_start.date()} → {actual_end.date()}")
     print(f"  Capital: ${capital:,.2f}")
     print(f"  Trading days: {len(trading_days)}")
@@ -1127,7 +1247,11 @@ if __name__ == '__main__':
     parser.add_argument('--start',   default=None,  help='Start date YYYY-MM-DD (optional)')
     parser.add_argument('--end',     default=None,  help='End date YYYY-MM-DD (optional)')
     parser.add_argument('--capital', default=25000, type=float)
+    parser.add_argument('--years',   default=5,     type=int,
+                        help='Years of history to fetch via Yahoo Finance (default: 5)')
     parser.add_argument('--export',  action='store_true')
+    parser.add_argument('--schwab',  action='store_true',
+                        help='Force Schwab API instead of Yahoo Finance')
     args = parser.parse_args()
 
     start = datetime.strptime(args.start, '%Y-%m-%d') if args.start else None
@@ -1138,7 +1262,8 @@ if __name__ == '__main__':
     client, paper = authenticate()
     print(f"✅ Connected ({'PAPER' if paper else 'LIVE'} mode)\n")
 
-    results = run_backtest(client, start, end, args.capital)
+    use_yf = not args.schwab
+    results = run_backtest(client, start, end, args.capital, years=args.years)
 
     if results:
         recs = generate_recommendations(results)
