@@ -66,15 +66,18 @@ REQUIRE_DIRECTION   = True    # only enter bullish signals in flow/neutral
 WEIGHTS = {
     'sweep_flow':    0.10,   # UW options sweep flow
     'dark_pool':     0.10,   # UW dark pool prints
-    'politician':    0.08,   # ⬆️ Quiver congressional trading (real data now)
-    'insider':       0.08,   # ⬆️ SEC EDGAR Form 4 (real data now)
+    'politician':    0.10,   # ⬆️ modest increase — real congressional data live
+    'insider':       0.10,   # ⬆️ modest increase — real SEC EDGAR Form 4 live
     'price_rvol':    0.05,   # price + relative volume
     'gex':           0.03,   # gamma exposure proxy
-    'market_tide':   0.28,   # SPY EMA trend
-    'sector_tide':   0.23,   # sector ETF trend
-    'etf_flow':      0.03,   # ETF volume flow
-    'reddit_wsb':    0.02,   # Reddit WSB contrarian sentiment (new)
+    'market_tide':   0.27,   # SPY EMA trend — kept dominant
+    'sector_tide':   0.22,   # sector ETF trend — kept dominant
+    'etf_flow':      0.01,   # ETF volume flow — reduced to make room
+    'reddit_wsb':    0.02,   # Reddit WSB contrarian sentiment
 }
+# market_tide + sector_tide = 49% — still dominant
+# politician + insider = 20% — modest raise from 16%
+# weights sum = 1.0
 # Note: weights sum to 1.0
 # market_tide + sector_tide dominate (51%) — confirmed best predictors
 # politician + insider now have real data — weights raised from 0.05 to 0.08

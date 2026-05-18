@@ -57,9 +57,9 @@ try:
 except Exception:
     def get_max_candidates(v): return 4
     CURRENT_WEIGHTS = {
-        'sweep_flow':  0.10, 'dark_pool':   0.10, 'politician': 0.08,
-        'insider':     0.08, 'price_rvol':  0.05, 'gex':        0.03,
-        'market_tide': 0.28, 'sector_tide': 0.23, 'etf_flow':   0.03,
+        'sweep_flow':  0.10, 'dark_pool':   0.10, 'politician': 0.10,
+        'insider':     0.10, 'price_rvol':  0.05, 'gex':        0.03,
+        'market_tide': 0.27, 'sector_tide': 0.22, 'etf_flow':   0.01,
         'reddit_wsb':  0.02,
     }
 
@@ -760,7 +760,7 @@ def run_backtest(client, start=None, end=None, capital=STARTING_CAPITAL, years=5
                 # If price stays above strike → collect premium (modeled as 1.5% of position)
                 # If price drops to strike    → "assigned" into equity position
                 if score >= 0.85 and portfolio.cash > price * 100:
-                    strike        = round(price * 0.96, 2)    # 4% OTM put
+                    strike        = round(price * 0.92, 2)    # 8% OTM put (30-delta target)
                     contracts     = max(1, min(3, int(portfolio.cash * 0.20 / (strike * 100))))
                     premium_est   = price * 0.015 * contracts  # ~1.5% premium estimate
                     cash_reserved = strike * contracts * 100
