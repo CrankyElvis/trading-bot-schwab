@@ -26,7 +26,7 @@ from auth import authenticate
 from data_collector import (
     collect_snapshot, get_vix, get_vix_history,
     get_vix_term_structure, get_price_history,
-    get_quotes, DEFAULT_UNIVERSE,
+    get_quotes, DEFAULT_UNIVERSE, get_dp_thresholds_bulk,
 )
 from regime_engine import evaluate_regime, print_regime_summary
 from cash_manager import evaluate_cash, get_parking_trades, print_parking_plan
@@ -318,7 +318,7 @@ def run_cycle(client):
     # ── Step 4: Cash parking — DISABLED pending evaluation ──────────────────
     print("\n🏦 Cash parking: DISABLED (backlog item #2 — pending evaluation)")
     # Re-enable by uncommenting:
-    # spy_hist        = get_price_history(client, 'SPY', days=30)
+    spy_hist         = get_price_history(client, 'SPY', days=30)
     # parking_tickers = ['GLD', 'SCHP', 'VTIP', 'GDX']
     # parking_quotes  = get_quotes(client, parking_tickers)
     # parking_plan    = evaluate_cash(regime_state.regime, portfolio, parking_quotes)
@@ -327,6 +327,11 @@ def run_cycle(client):
     portfolio = load_portfolio()
 
     # ── Pre-market scan (6:00am) ─────────────────────────────────────────────
+    # ── Close overnight position at open ─────────────────────────────────────
+    if cycle_action in ('pre_open', 'open') and not weekend:
+        portfolio = load_portfolio()
+        _close_overnight_position(client, portfolio)
+
     if cycle_action == 'premarket_scan' and not weekend:
         print("\n🌅 Pre-market scan — scoring full 141-symbol universe...")
         from pre_market_scanner import run_scan
@@ -365,6 +370,12 @@ def run_cycle(client):
         log_cycle({'event': 'after_hours', 'regime': regime_state.regime,
                    'timestamp': cycle_start.isoformat()})
         return
+
+    # ── Close cycle overnight index strategy ─────────────────────────────────
+    # Runs at 4:05pm ET after exits are processed
+    # Buy index ETF at close, sell at next open to capture overnight drift
+    if cycle_action == 'exit_only' and not weekend:
+        _run_overnight_strategy(client, portfolio, regime_state)
 
     # ── Weekend: watchlist prep only ──────────────────────────────────────────
     if weekend:
@@ -471,7 +482,6 @@ def run_cycle(client):
             pos = portfolio.get('positions', {}).get(sig.symbol, {})
             qty = pos.get('quantity', 0)
             if qty >= 100:
-                from options_manager import OptionsSignal, paper_sell_covered_call
                 cc_signal = OptionsSignal(
                     symbol=sig.symbol,
                     action='sell_covered_call',
@@ -593,13 +603,50 @@ def run_cycle(client):
     from options_manager import paper_sell_csp
     for signal in options_eval.get('csps', []):
         portfolio = load_portfolio()
-        # Skip if already have a position in this symbol
         if signal.symbol in portfolio.get('positions', {}):
             continue
         pos = paper_sell_csp(signal, portfolio)
         if pos:
             print(f"  ✅ CSP sold: {signal.symbol} — "
                   f"effective buy ${pos['effective_cost']:.2f} if assigned")
+
+    # ── Volatility Playbook ────────────────────────────────────────────────────
+    if regime_state.regime == 'volatility':
+        portfolio  = load_portfolio()
+        idle_cash  = portfolio.get('cash', 0)
+        all_quotes = get_quotes(client, ['SPY','QQQ','XLP','XLU','XLV','GLD','GDX'])
+
+        # 1. Defensive sector rotation
+        def_signals = evaluate_defensive_rotation(
+            regime=regime_state.regime, vixy=regime_state.vixy,
+            quotes=all_quotes, idle_cash=idle_cash,
+        )
+        for sig in def_signals:
+            print(f"  🛡️  DEFENSIVE: BUY {sig['shares']}x {sig['symbol']} "
+                  f"@ ${sig['price']:.2f} = ${sig['cost']:,.0f}  ({sig['note']})")
+
+        # 2. VIX mean reversion (SPY calls on spike)
+        mr_signal = evaluate_vix_mean_reversion(
+            regime=regime_state.regime,
+            mean_reversion_signal=regime_state.mean_reversion_signal,
+            vixy=regime_state.vixy,
+            vix_zscore=regime_state.vix_zscore,
+            quotes=all_quotes, idle_cash=idle_cash,
+        )
+        if mr_signal:
+            print(f"  🎯 MEAN REVERSION: {mr_signal['note']}")
+
+        # 3. Iron condor on SPY/QQQ when vol stable
+        for ic_sym in ['SPY', 'QQQ']:
+            ic = evaluate_iron_condor(
+                regime=regime_state.regime, vixy=regime_state.vixy,
+                vix_zscore=regime_state.vix_zscore,
+                term_signal=regime_state.term_signal,
+                quotes=all_quotes, idle_cash=idle_cash, symbol=ic_sym,
+            )
+            if ic:
+                print(f"  📐 IRON CONDOR: {ic['note']}")
+                break   # one condor at a time
 
     # ── Final portfolio snapshot ───────────────────────────────────────────────
     print("\n📄 End-of-cycle portfolio:")
