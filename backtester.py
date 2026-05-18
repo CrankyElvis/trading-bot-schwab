@@ -696,9 +696,11 @@ def run_backtest(client, start=None, end=None, capital=STARTING_CAPITAL, years=5
     print(f"  Trading days: {len(trading_days)}")
     print(f"{'='*62}\n")
 
-    portfolio  = BacktestPortfolio(capital)
-    prev_value = capital
+    portfolio   = BacktestPortfolio(capital)
+    prev_value  = capital
     last_regime = 'neutral'
+    peak_value  = capital          # for trailing stop + drawdown-aware sizing
+    peak_10d    = [capital] * 10   # rolling 10-day peak window
 
     for i, date in enumerate(trading_days):
         dt     = date.to_pydatetime()
@@ -720,10 +722,83 @@ def run_backtest(client, start=None, end=None, capital=STARTING_CAPITAL, years=5
         # Parking disabled in backtest — evaluate separately (backlog item #2)
         # portfolio.rebalance_parking(regime, prices, dt)
 
+        # ── PROTECTION 1: Regime-aware half-exit on regime flip ─────────────
+        # When regime flips to volatility from neutral/flow → reduce all
+        # open equity positions by 50% to lock in gains before stops fire
+        if regime == 'volatility' and last_regime in ('neutral', 'flow'):
+            for sym in list(portfolio.positions.keys()):
+                pos = portfolio.positions[sym]
+                if pos.is_parking:
+                    continue
+                cur_price = prices.get(sym, 0)
+                if cur_price <= 0 or pos.shares <= 1:
+                    continue
+                # Sell half the position
+                half_shares = pos.shares // 2
+                if half_shares >= 1:
+                    pnl = (cur_price - pos.cost_basis) * half_shares
+                    portfolio.cash += cur_price * half_shares * 0.9995   # tiny spread
+                    pos.shares     -= half_shares
+                    pos.value       = pos.shares * cur_price
+                    if pos.shares <= 0:
+                        del portfolio.positions[sym]
+
+        # ── PROTECTION 2: Seasonal blackout Dec 15 – Jan 5 ───────────────────
+        blackout = (dt.month == 12 and dt.day >= 15) or                    (dt.month == 1  and dt.day <= 5)
+
+        # ── PROTECTION 3: Fast VIX spike — cut sizing 50% ────────────────────
+        vix_spike_flag = False
+        if i >= 5:
+            vix_5d_ago = float(vix_df.iloc[max(0,i-5)]['vix'])
+            if vix_5d_ago > 0 and (vix - vix_5d_ago) / vix_5d_ago >= 0.30:
+                vix_spike_flag = True
+
+        # ── PROTECTION 4: Drawdown-aware sizing ──────────────────────────────
+        # If portfolio down 3%+ from 10-day peak → cut new sizing 50%
+        ten_day_peak     = max(peak_10d) if peak_10d else capital
+        port_val_now     = portfolio.portfolio_value(prices)
+        dd_from_10d_peak = (port_val_now - ten_day_peak) / ten_day_peak if ten_day_peak > 0 else 0
+        drawdown_flag    = dd_from_10d_peak <= -0.03
+
+        # ── PROTECTION 5: Trailing stops on big winners ───────────────────────
+        # Positions up 20%+ use trailing stop at 8% from their peak
+        for sym in list(portfolio.positions.keys()):
+            pos = portfolio.positions.get(sym)
+            if pos is None or pos.is_parking:
+                continue
+            cur_price = prices.get(sym, 0)
+            if cur_price <= 0:
+                continue
+            gain_pct = (cur_price - pos.cost_basis) / pos.cost_basis if pos.cost_basis > 0 else 0
+            if gain_pct >= 0.20:
+                # Track peak price on position
+                if not hasattr(pos, 'peak_price') or pos.peak_price is None:
+                    pos.peak_price = cur_price
+                pos.peak_price = max(pos.peak_price, cur_price)
+                # Trailing stop: 8% below peak
+                trailing_stop_price = pos.peak_price * 0.92
+                if cur_price <= trailing_stop_price:
+                    pnl = (cur_price - pos.cost_basis) * pos.shares
+                    portfolio.cash += cur_price * pos.shares * 0.9995
+                    portfolio.trades.append(Trade(
+                        symbol=sym, action='SELL', shares=pos.shares,
+                        price=cur_price, pnl=pnl,
+                        entry_date=pos.entry_date, exit_date=dt.isoformat(),
+                        exit_reason='trailing_stop', regime=regime,
+                        entry_signals=pos.entry_signals, is_parking=False,
+                    ))
+                    del portfolio.positions[sym]
+
         # Score and trade (need 30 days warmup)
         open_trading = [s for s in portfolio.positions
                         if not portfolio.positions[s].is_parking]
         max_new = min(MAX_CANDIDATES, MAX_POSITIONS - len(open_trading))
+
+        # Apply protective sizing reductions
+        if blackout or regime == 'crisis':
+            max_new = 0
+        elif vix_spike_flag or drawdown_flag:
+            max_new = max(1, max_new // 2)   # cut max candidates in half
 
         if max_new > 0 and i >= 30:
             scores = {}
@@ -814,6 +889,8 @@ def run_backtest(client, start=None, end=None, capital=STARTING_CAPITAL, years=5
         ))
         prev_value  = port_val
         last_regime = regime
+        peak_value  = max(peak_value, port_val)
+        peak_10d    = peak_10d[1:] + [port_val]
 
         if i % 50 == 0:
             tval = portfolio.trading_value(prices)
