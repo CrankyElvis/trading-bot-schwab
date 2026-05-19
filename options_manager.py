@@ -422,8 +422,11 @@ def evaluate_csp(
     """
     if score < CSP_MIN_SCORE:
         return None
-    if regime in ('volatility', 'crisis'):
+    # Crisis: no new positions at all
+    if regime == 'crisis':
         return None
+    # Volatility: allow CSPs only — premium is highest when VIX is elevated
+    # Tighter sizing: 15% budget vs 25% in normal regimes
     if last_price <= 0 or idle_cash <= 0:
         return None
 
@@ -431,9 +434,11 @@ def evaluate_csp(
     # 30-delta rule: ~30% probability of assignment = good risk/reward
     strike = round(last_price * (1 - CSP_OTM_PCT), 2)
 
-    # Cash required to secure put: strike × 100 × contracts
-    max_budget  = idle_cash * CSP_MAX_BUDGET
-    contracts   = max(1, min(5, int(max_budget / (strike * 100))))
+    # Cash required to secure put — tighter in volatility regime
+    vol_budget  = 0.15 if regime == 'volatility' else CSP_MAX_BUDGET
+    max_budget  = idle_cash * vol_budget
+    contracts   = max(1, min(3 if regime == 'volatility' else 5,
+                             int(max_budget / (strike * 100))))
     cash_needed = strike * contracts * 100
 
     if cash_needed > idle_cash * 0.90:
@@ -562,6 +567,125 @@ def check_wheel_management(
     return False, ''
 
 
+# ── Defensive Sector Rotation (Volatility Regime) ───────────────────────────
+
+DEFENSIVE_ETFS = {
+    'XLP':  {'weight': 0.25, 'note': 'Consumer staples — recession resistant'},
+    'XLU':  {'weight': 0.20, 'note': 'Utilities — defensive, dividend yield'},
+    'XLV':  {'weight': 0.25, 'note': 'Healthcare — non-cyclical demand'},
+    'GLD':  {'weight': 0.20, 'note': 'Gold — flight to safety'},
+    'GDX':  {'weight': 0.10, 'note': 'Gold miners — leveraged gold exposure'},
+}
+
+
+def evaluate_defensive_rotation(
+    regime:     str,
+    vixy:       float,
+    quotes:     dict,
+    idle_cash:  float,
+    max_budget: float = 0.30,   # max 30% of idle cash in defensive rotation
+) -> list:
+    """
+    During volatility regime, actively rotate into defensive sector ETFs.
+    These are traded positions (not parking) — actively managed with exits.
+
+    Only fires when:
+      - regime == 'volatility'
+      - vixy > 20 (confirmed elevated vol environment)
+      - idle_cash available
+
+    Returns list of OptionsSignal-like dicts for defensive entries.
+    """
+    if regime not in ('volatility',):
+        return []
+    if vixy < 20 or idle_cash <= 0:
+        return []
+
+    signals  = []
+    budget   = idle_cash * max_budget
+    per_etf  = budget / len(DEFENSIVE_ETFS)
+
+    for ticker, meta in DEFENSIVE_ETFS.items():
+        last = quotes.get(ticker, {}).get('last', 0)
+        if last <= 0:
+            continue
+        alloc   = per_etf * meta['weight'] * len(DEFENSIVE_ETFS)
+        shares  = int(alloc / last)
+        if shares < 1:
+            continue
+        signals.append({
+            'type':     'defensive_rotation',
+            'symbol':   ticker,
+            'shares':   shares,
+            'price':    last,
+            'cost':     round(shares * last, 2),
+            'note':     meta['note'],
+            'regime':   regime,
+        })
+
+    return signals
+
+
+# 3. VIX Mean Reversion — buy SPY calls on spike
+def evaluate_vix_mean_reversion(
+    regime:              str,
+    mean_reversion_signal: bool,
+    vixy:                float,
+    vix_zscore:          float,
+    quotes:              dict,
+    idle_cash:           float,
+) -> dict | None:
+    """
+    When VIX spikes dynamically above its recent history + term structure
+    shows backwardation, buy SPY calls to capture the mean reversion rally.
+
+    Parameters tuned for high-probability setups:
+      - 20-delta calls (further OTM = cheaper, leveraged upside)
+      - 30 DTE — enough time for reversion
+      - Max 5% of idle cash — this is a tactical bet, not a core position
+    """
+    if not mean_reversion_signal:
+        return None
+    if regime == 'crisis':   # don't catch falling knives in true crisis
+        return None
+    if idle_cash <= 0:
+        return None
+
+    spy_last = quotes.get('SPY', {}).get('last', 0)
+    if spy_last <= 0:
+        return None
+
+    # Strike: 3% OTM call (20-delta approximate)
+    strike   = round(spy_last * 1.03, 0)
+    budget   = idle_cash * 0.05   # max 5% of idle cash
+    contracts = max(1, min(3, int(budget / (spy_last * 0.03 * 100))))
+
+    from datetime import datetime, timedelta
+    expiry_dt = datetime.now() + timedelta(days=30)
+    days_to_friday = (4 - expiry_dt.weekday()) % 7
+    expiry_dt += timedelta(days=days_to_friday)
+    expiry = expiry_dt.strftime('%Y-%m-%d')
+
+    # Estimate call premium (rough BS approximation at elevated IV)
+    iv_estimate   = min(vixy / 100 * 1.2, 0.80)   # scale VIX to IV
+    premium_est   = round(spy_last * iv_estimate * 0.12 * contracts, 2)
+
+    return {
+        'type':       'vix_mean_reversion',
+        'symbol':     'SPY',
+        'action':     'buy_call',
+        'strike':     strike,
+        'expiry':     expiry,
+        'contracts':  contracts,
+        'premium_est': premium_est,
+        'cost':       premium_est,
+        'vix_zscore': round(vix_zscore, 2),
+        'vixy':       vixy,
+        'note':       (f"VIX mean reversion: z={vix_zscore:.1f}, "
+                       f"buy {contracts}x SPY ${strike:.0f}C {expiry}"),
+    }
+
+
 # ── Main Evaluation ───────────────────────────────────────────────────────────
 
 def evaluate_options(
@@ -627,6 +751,89 @@ def evaluate_options(
         'covered_calls': covered_call_signals,
         'csps':          csp_signals,
         'exits':         exit_signals,
+    }
+
+
+def evaluate_iron_condor(
+    regime:    str,
+    vixy:      float,
+    vix_zscore: float,
+    term_signal: str,
+    quotes:    dict,
+    idle_cash: float,
+    symbol:    str = 'SPY',
+) -> dict | None:
+    """
+    Sells an iron condor when VIX is elevated but stable (not spiking).
+    Profits if the market stays rangebound — common in sustained volatility.
+
+    Setup:
+      - Sell OTM put  (30 delta, ~5% below current)
+      - Sell OTM call (30 delta, ~5% above current)
+      - Buy further OTM put  (50 delta below short put, protection)
+      - Buy further OTM call (50 delta above short call, protection)
+      - DTE: 30-45 days
+      - Only when VIX 22-40 AND term structure contango (stable, not spiking)
+
+    Tastytrade rule: close at 50% of max profit.
+    Max loss defined by wing width (protection bought).
+    """
+    # Iron condor conditions: elevated but stable vol, not in crisis
+    if regime == 'crisis':
+        return None
+    if vixy < 22 or vixy > 45:   # too low = not worth it, too high = too risky
+        return None
+    if term_signal != 'contango':  # backwardation = spiking = don't sell condor
+        return None
+    if idle_cash <= 0:
+        return None
+
+    last = quotes.get(symbol, {}).get('last', 0)
+    if last <= 0:
+        return None
+
+    # Strikes
+    short_put   = round(last * 0.95, 0)    # 5% OTM put (sell)
+    long_put    = round(last * 0.90, 0)    # 10% OTM put (buy — protection)
+    short_call  = round(last * 1.05, 0)    # 5% OTM call (sell)
+    long_call   = round(last * 1.10, 0)    # 10% OTM call (buy — protection)
+    wing_width  = last * 0.05              # $5% width per side
+
+    # Budget: max 10% of idle cash (defined risk trade)
+    budget      = idle_cash * 0.10
+    contracts   = max(1, min(5, int(budget / (wing_width * 100))))
+
+    # Premium estimate: ~1.5% of SPY price per side for 30-45 DTE at VIX 25+
+    net_premium = round(last * 0.015 * contracts * 2, 2)   # both sides
+    max_loss    = round(wing_width * contracts * 100 - net_premium, 2)
+    profit_target = round(net_premium * 0.50, 2)   # 50% profit target
+
+    from datetime import datetime, timedelta
+    expiry_dt = datetime.now() + timedelta(days=35)
+    days_to_friday = (4 - expiry_dt.weekday()) % 7
+    expiry_dt += timedelta(days=days_to_friday)
+    expiry = expiry_dt.strftime('%Y-%m-%d')
+
+    return {
+        'type':          'iron_condor',
+        'symbol':        symbol,
+        'expiry':        expiry,
+        'contracts':     contracts,
+        'short_put':     short_put,
+        'long_put':      long_put,
+        'short_call':    short_call,
+        'long_call':     long_call,
+        'net_premium':   net_premium,
+        'max_loss':      max_loss,
+        'profit_target': profit_target,
+        'vixy':          vixy,
+        'note':          (f"Iron condor {symbol}: "
+                          f"${long_put:.0f}/{short_put:.0f}P "
+                          f"${short_call:.0f}/{long_call:.0f}C "
+                          f"exp {expiry} | "
+                          f"collect ${net_premium:.0f} | "
+                          f"max loss ${max_loss:.0f} | "
+                          f"close at ${profit_target:.0f}"),
     }
 
 
