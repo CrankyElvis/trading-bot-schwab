@@ -7,7 +7,47 @@ PAPER_PORTFOLIO_FILE = 'paper_portfolio.json'
 
 # ── Fee Constants ─────────────────────────────────────────────────────────────
 OPTIONS_COMMISSION_PER_CONTRACT = 0.65   # Schwab options rate
-SPREAD_COST_PCT = 0.0005                 # 0.05% of trade value (bid/ask spread estimate)
+SPREAD_COST_PCT = 0.0005                 # 0.05% default (overridden by liquidity tier)
+
+# ── Liquidity tiers — bid/ask spread model ────────────────────────────────────
+# Tier 1 (mega-cap ETFs): SPY QQQ IWM GLD TLT — spread ~0.01%
+# Tier 2 (large-cap):     AAPL MSFT NVDA AMZN META TSLA etc — spread ~0.03%
+# Tier 3 (mid-cap):       most individual stocks — spread ~0.08%
+# Tier 4 (small/volatile): MSTR MEME stocks LCID RIVN etc — spread ~0.15%
+_TIER1 = {'SPY','QQQ','IWM','DIA','GLD','GDX','TLT','SLV','IAU','EEM',
+           'EFA','XLF','XLK','XLE','XLV','XLI','XLP','XLU','XLB','XLC',
+           'XLRE','XLY','HYG','LQD','VTI','VNQ','SMH','SOXX','IBB','MBB',
+           'VIXY','VXX','UVXY','SQQQ','SPXU','USO','UNG','VTIP','SCHP'}
+_TIER2 = {'AAPL','MSFT','NVDA','AMZN','META','TSLA','GOOGL','GOOG','AVGO',
+           'JPM','BAC','GS','MS','WFC','C','BLK','SCHW','COST','HD','LOW',
+           'UNH','LLY','JNJ','PFE','ABBV','MRK','TMO','DHR','ISRG','VRTX',
+           'V','MA','PYPL','NDAQ','CME','ICE','SPGI','MCO','BK','STT',
+           'AMGN','GILD','BIIB','REGN','MRNA','CVX','XOM','COP','EOG',
+           'NVDA','AMD','INTC','QCOM','AMAT','LRCX','KLAC','ASML','TSM',
+           'NFLX','DIS','CMCSA','T','VZ','TMUS','SBUX','MCD','YUM',
+           'CAT','DE','HON','ETN','EMR','GE','RTX','LMT','NOC','GD',
+           'NOW','CRM','MSFT','ORCL','ADBE','SNOW','DDOG','PANW','CRWD',
+           'COIN','PLTR','UBER','LYFT','DASH','ABNB','RBLX','HOOD'}
+
+def _spread_pct(symbol: str) -> float:
+    s = symbol.upper()
+    if s in _TIER1: return 0.0001   # 0.01% — mega liquid ETFs
+    if s in _TIER2: return 0.0003   # 0.03% — large-cap stocks
+    return 0.0008                   # 0.08% — everything else (mid/small/volatile)
+
+# ── Fill probability model ────────────────────────────────────────────────────
+# Simulates realistic partial/rejected fills for paper trading realism
+# Market orders: 95% chance of full fill, 4% partial (80% of qty), 1% reject
+# We use market orders for simplicity — limit order modeling is backlog #future
+import random as _random
+def _simulate_fill(symbol: str, quantity: int) -> tuple[int, str]:
+    """Returns (filled_qty, fill_status) — 'full' | 'partial' | 'rejected'"""
+    roll = _random.random()
+    if roll < 0.01:                          # 1% — order rejected
+        return 0, 'rejected'
+    elif roll < 0.05 and quantity > 10:      # 4% — partial fill (80% of qty)
+        return max(1, int(quantity * 0.80)), 'partial'
+    return quantity, 'full'                  # 95% — full fill
 MIN_EDGE_MULTIPLIER = 2.0               # trade must profit at least 2x estimated costs
 
 
@@ -75,12 +115,14 @@ def get_live_price(client, symbol):
 
 # ── Fee Estimator ─────────────────────────────────────────────────────────────
 
-def estimate_fees(trade_value: float, contracts: int = 0) -> dict:
+def estimate_fees(trade_value: float, contracts: int = 0,
+                  symbol: str = '') -> dict:
     """
     Estimates total trading cost for a given trade.
     Returns breakdown of spread cost, commission, and total.
     """
-    spread  = round(trade_value * SPREAD_COST_PCT, 4)
+    sp_pct  = _spread_pct(symbol) if symbol else SPREAD_COST_PCT
+    spread  = round(trade_value * sp_pct, 4)
     commission = round(contracts * OPTIONS_COMMISSION_PER_CONTRACT, 4)
     total   = round(spread + commission, 4)
     min_profit = round(total * MIN_EDGE_MULTIPLIER, 4)
@@ -119,7 +161,17 @@ def paper_buy(client, symbol, quantity, contracts: int = 0):
 
     fill_price  = price_data['ask'] if price_data['ask'] > 0 else price_data['last']
     trade_value = fill_price * quantity
-    fees        = estimate_fees(trade_value, contracts)
+    # Simulate fill — partial fills and rare rejections
+    filled_qty, fill_status = _simulate_fill(symbol, quantity)
+    if fill_status == 'rejected':
+        print(f"⚠️  PAPER ORDER REJECTED: {symbol} x{quantity} — simulating Schwab rejection")
+        return False
+    if fill_status == 'partial':
+        print(f"⚠️  PAPER PARTIAL FILL: {symbol} {filled_qty}/{quantity} shares filled")
+        quantity = filled_qty
+
+    trade_value = fill_price * quantity
+    fees        = estimate_fees(trade_value, contracts, symbol)
     total_cost  = round(trade_value + fees['total_fees'], 4)
 
     if total_cost > portfolio['cash']:
@@ -150,6 +202,7 @@ def paper_buy(client, symbol, quantity, contracts: int = 0):
         'type':            'BUY',
         'symbol':          symbol,
         'quantity':        quantity,
+        'fill_status':     fill_status,
         'fill_price':      fill_price,
         'trade_value':     round(trade_value, 2),
         'spread_cost':     fees['spread_cost'],
