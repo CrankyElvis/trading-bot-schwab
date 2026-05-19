@@ -187,7 +187,8 @@ def get_size_scalar(vix: float) -> float:
 
 # ── Data Fetcher ──────────────────────────────────────────────────────────────
 
-def fetch_yfinance(tickers: list, years: int = 5) -> dict:
+def fetch_yfinance(tickers: list, years: int = 5,
+                   start_date: str = None, end_date: str = None) -> dict:
     """
     Fetches up to 5 years of daily OHLCV from Yahoo Finance.
     Free, no API key, no rate limits for daily data.
@@ -210,14 +211,14 @@ def fetch_yfinance(tickers: list, years: int = 5) -> dict:
     for i in range(0, len(tickers), batch_size):
         batch = tickers[i:i+batch_size]
         try:
-            raw = yf.download(
-                batch,
-                period=period,
-                interval='1d',
-                auto_adjust=True,
-                progress=False,
-                threads=True,
-            )
+            dl_kwargs = dict(interval='1d', auto_adjust=True,
+                            progress=False, threads=True)
+            if start_date and end_date:
+                dl_kwargs['start'] = start_date
+                dl_kwargs['end']   = end_date
+            else:
+                dl_kwargs['period'] = period
+            raw = yf.download(batch, **dl_kwargs)
             if raw.empty:
                 failed.extend(batch)
                 continue
@@ -262,7 +263,8 @@ def fetch_yfinance(tickers: list, years: int = 5) -> dict:
     return history
 
 
-def fetch_all_history(client, tickers: list, use_yfinance: bool = True, years: int = 5) -> dict:
+def fetch_all_history(client, tickers: list, use_yfinance: bool = True, years: int = 5,
+                      start_date: str = None, end_date: str = None) -> dict:
     """
     Fetches price history. 
     Primary:  Yahoo Finance (5 years, free, fast batch download)
@@ -270,7 +272,8 @@ def fetch_all_history(client, tickers: list, use_yfinance: bool = True, years: i
     """
     if use_yfinance:
         try:
-            history = fetch_yfinance(tickers, years=years)
+            history = fetch_yfinance(tickers, years=years,
+                                        start_date=start_date, end_date=end_date)
             if history:
                 return history
             print("  ⚠️  Yahoo Finance returned no data — falling back to Schwab")
@@ -667,7 +670,10 @@ def run_backtest(client, start=None, end=None, capital=STARTING_CAPITAL, years=5
     vix_df = fetch_vix_history()
 
     # Fetch price history — Yahoo Finance gives 5 years vs Schwab's 2
-    history  = fetch_all_history(client, ALL_TICKERS, use_yfinance=True, years=years)
+    sd = start.strftime('%Y-%m-%d') if start else None
+    ed = end.strftime('%Y-%m-%d')   if end   else None
+    history  = fetch_all_history(client, ALL_TICKERS, use_yfinance=True, years=years,
+                                  start_date=sd, end_date=ed)
     spy_hist = history.get('SPY', pd.DataFrame())
     if spy_hist.empty:
         print("❌ No SPY data")
@@ -1457,6 +1463,94 @@ def export_csv(results, recs, prefix='backtest'):
 
 # ── Entry Point ───────────────────────────────────────────────────────────────
 
+def run_walkforward(client, capital: float = 25000.0):
+    """
+    Walk-forward validation:
+      IN-SAMPLE:    2021-01-01 → 2023-12-31 (3 years training)
+      OUT-OF-SAMPLE: 2024-01-01 → 2026-05-18 (2+ years blind test)
+
+    Compares Sharpe, annual return, win rate, and max drawdown between
+    in-sample and out-of-sample periods. A >50% degradation in Sharpe
+    suggests overfitting — weights need recalibration before going live.
+    """
+    from datetime import datetime
+
+    SPLIT_DATE = datetime(2024, 1, 1)
+    IS_START   = datetime(2021, 1, 1)
+    IS_END     = datetime(2023, 12, 31)
+    OOS_START  = datetime(2024, 1, 1)
+    OOS_END    = datetime(2026, 5, 18)
+
+    print("=" * 62)
+    print("  WALK-FORWARD VALIDATION")
+    print(f"  In-sample:     {IS_START.date()} → {IS_END.date()} (training)")
+    print(f"  Out-of-sample: {OOS_START.date()} → {OOS_END.date()} (blind test)")
+    print(f"  Capital:       ${capital:,.2f}")
+    print("=" * 62)
+
+    print("\n📊 Running IN-SAMPLE backtest (2021–2023)...")
+    is_results = run_backtest(client, IS_START, IS_END, capital, years=3)
+
+    print("\n📊 Running OUT-OF-SAMPLE backtest (2024–2026)...")
+    oos_results = run_backtest(client, OOS_START, OOS_END, capital, years=2)
+
+    if not is_results or not oos_results:
+        print("❌ Walk-forward failed — one or both backtests returned no results")
+        return
+
+    is_s  = is_results['summary']
+    oos_s = oos_results['summary']
+
+    # ── Comparison ──────────────────────────────────────────────────────────
+    print("\n" + "=" * 62)
+    print("  WALK-FORWARD RESULTS")
+    print("=" * 62)
+    print(f"  {'Metric':<22} {'In-Sample':>14} {'Out-of-Sample':>16}  {'Δ':>8}")
+    print(f"  {'-'*62}")
+
+    metrics = [
+        ('Annual return %',  'annual_return_pct',  True),
+        ('Sharpe ratio',     'sharpe_ratio',        True),
+        ('Max drawdown %',   'max_drawdown_pct',    False),  # lower is better
+        ('Win rate %',       'win_rate_pct',        True),
+        ('Total trades',     'total_trades',        True),
+    ]
+
+    degradations = []
+    for label, key, higher_is_better in metrics:
+        iv = is_s.get(key, 0)
+        ov = oos_s.get(key, 0)
+        if iv != 0:
+            pct_change = (ov - iv) / abs(iv) * 100
+        else:
+            pct_change = 0
+        arrow = '🟢' if (pct_change >= 0) == higher_is_better else '🔴'
+        print(f"  {label:<22} {iv:>14.2f} {ov:>16.2f}  {arrow}{pct_change:>+7.1f}%")
+        if key == 'sharpe_ratio':
+            degradations.append(pct_change)
+
+    # ── Verdict ─────────────────────────────────────────────────────────────
+    sharpe_degradation = degradations[0] if degradations else 0
+    print(f"\n  {'='*62}")
+
+    if sharpe_degradation >= -20:
+        verdict = "✅ GO — Out-of-sample Sharpe within 20% of in-sample"
+        verdict_detail = "Strategy shows robust generalization. Proceed with paper trading."
+    elif sharpe_degradation >= -50:
+        verdict = "⚠️  CAUTION — Moderate Sharpe degradation ({:.0f}%)".format(sharpe_degradation)
+        verdict_detail = "Some overfitting detected. Monitor paper trading closely before going live."
+    else:
+        verdict = "🔴 NOT YET — Significant Sharpe degradation ({:.0f}%)".format(sharpe_degradation)
+        verdict_detail = "Strategy is overfit. Recalibrate signal weights before live trading."
+
+    print(f"\n  {verdict}")
+    print(f"  {verdict_detail}")
+    print(f"\n  Sharpe degradation: {sharpe_degradation:+.1f}%")
+    print(f"  In-sample final:    ${is_s.get('final_value', 0):>12,.2f}")
+    print(f"  Out-of-sample final: ${oos_s.get('final_value', 0):>11,.2f}")
+    print(f"  {'='*62}\n")
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--start',   default=None,  help='Start date YYYY-MM-DD (optional)')
@@ -1467,6 +1561,8 @@ if __name__ == '__main__':
     parser.add_argument('--export',  action='store_true')
     parser.add_argument('--schwab',  action='store_true',
                         help='Force Schwab API instead of Yahoo Finance')
+    parser.add_argument('--walkforward', action='store_true',
+                        help='Run walk-forward test: train 2021-2023, test 2024-2026')
     args = parser.parse_args()
 
     start = datetime.strptime(args.start, '%Y-%m-%d') if args.start else None
@@ -1478,6 +1574,11 @@ if __name__ == '__main__':
     print(f"✅ Connected ({'PAPER' if paper else 'LIVE'} mode)\n")
 
     use_yf = not args.schwab
+
+    if args.walkforward:
+        run_walkforward(client, args.capital)
+        import sys; sys.exit(0)
+
     results = run_backtest(client, start, end, args.capital, years=args.years)
 
     if results:
@@ -1670,7 +1771,8 @@ def get_size_scalar(vix: float) -> float:
 
 # ── Data Fetcher ──────────────────────────────────────────────────────────────
 
-def fetch_yfinance(tickers: list, years: int = 5) -> dict:
+def fetch_yfinance(tickers: list, years: int = 5,
+                   start_date: str = None, end_date: str = None) -> dict:
     """
     Fetches up to 5 years of daily OHLCV from Yahoo Finance.
     Free, no API key, no rate limits for daily data.
@@ -1683,9 +1785,12 @@ def fetch_yfinance(tickers: list, years: int = 5) -> dict:
         print("  ⚠️  yfinance not installed — run: pip install yfinance")
         return {}
 
-    print(f"\n📥 Fetching {years}yr history from Yahoo Finance ({len(tickers)} tickers)...")
+    if start_date and end_date:
+        print(f"\n📥 Fetching history {start_date} → {end_date} from Yahoo Finance ({len(tickers)} tickers)...")
+    else:
+        print(f"\n📥 Fetching {years}yr history from Yahoo Finance ({len(tickers)} tickers)...")
     history  = {}
-    period   = f"{years}y"
+    period   = f"{years}y" if not start_date else None
     failed   = []
 
     # Batch download is much faster than individual downloads
@@ -1693,14 +1798,14 @@ def fetch_yfinance(tickers: list, years: int = 5) -> dict:
     for i in range(0, len(tickers), batch_size):
         batch = tickers[i:i+batch_size]
         try:
-            raw = yf.download(
-                batch,
-                period=period,
-                interval='1d',
-                auto_adjust=True,
-                progress=False,
-                threads=True,
-            )
+            dl_kwargs = dict(interval='1d', auto_adjust=True,
+                            progress=False, threads=True)
+            if start_date and end_date:
+                dl_kwargs['start'] = start_date
+                dl_kwargs['end']   = end_date
+            else:
+                dl_kwargs['period'] = period
+            raw = yf.download(batch, **dl_kwargs)
             if raw.empty:
                 failed.extend(batch)
                 continue
@@ -1745,7 +1850,8 @@ def fetch_yfinance(tickers: list, years: int = 5) -> dict:
     return history
 
 
-def fetch_all_history(client, tickers: list, use_yfinance: bool = True, years: int = 5) -> dict:
+def fetch_all_history(client, tickers: list, use_yfinance: bool = True, years: int = 5,
+                      start_date: str = None, end_date: str = None) -> dict:
     """
     Fetches price history. 
     Primary:  Yahoo Finance (5 years, free, fast batch download)
@@ -1753,7 +1859,8 @@ def fetch_all_history(client, tickers: list, use_yfinance: bool = True, years: i
     """
     if use_yfinance:
         try:
-            history = fetch_yfinance(tickers, years=years)
+            history = fetch_yfinance(tickers, years=years,
+                                        start_date=start_date, end_date=end_date)
             if history:
                 return history
             print("  ⚠️  Yahoo Finance returned no data — falling back to Schwab")
@@ -2150,7 +2257,10 @@ def run_backtest(client, start=None, end=None, capital=STARTING_CAPITAL, years=5
     vix_df = fetch_vix_history()
 
     # Fetch price history — Yahoo Finance gives 5 years vs Schwab's 2
-    history  = fetch_all_history(client, ALL_TICKERS, use_yfinance=True, years=years)
+    sd = start.strftime('%Y-%m-%d') if start else None
+    ed = end.strftime('%Y-%m-%d')   if end   else None
+    history  = fetch_all_history(client, ALL_TICKERS, use_yfinance=True, years=years,
+                                  start_date=sd, end_date=ed)
     spy_hist = history.get('SPY', pd.DataFrame())
     if spy_hist.empty:
         print("❌ No SPY data")
