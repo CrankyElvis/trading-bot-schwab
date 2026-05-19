@@ -13,6 +13,18 @@ Fetches all market data needed by the trading bot:
 
 import os
 import time
+
+def _retry(fn, *args, attempts=3, **kwargs):
+    """Retry a Schwab API call with exponential backoff on failure."""
+    for i in range(attempts):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            if i < attempts - 1:
+                time.sleep(0.4 * (i + 1))
+            else:
+                raise
+
 import requests
 import pandas as pd
 from datetime import datetime, timedelta, timezone
@@ -52,7 +64,7 @@ def get_price_history(client, symbol: str, days: int = 60) -> pd.DataFrame:
         end   = datetime.now()
         start = end - timedelta(days=days)
 
-        resp = client.get_price_history(
+        resp = _retry(client.get_price_history,
             symbol,
             period_type=client.PriceHistory.PeriodType.MONTH,
             period=client.PriceHistory.Period.TWO_MONTHS,
@@ -86,7 +98,7 @@ def get_quote(client, symbol: str) -> dict:
     Falls back through regular -> quote -> extended for after-hours.
     """
     try:
-        resp  = client.get_quote(symbol)
+        resp  = _retry(client.get_quote, symbol)
         data  = resp.json()
         asset = data.get(symbol, {})
 
@@ -118,11 +130,19 @@ def get_quote(client, symbol: str) -> dict:
 
 
 def get_quotes(client, symbols: list) -> dict:
-    """Batch quote fetch. Returns {symbol: quote_dict}."""
+    """Batch quote fetch with rate limiting. Returns {symbol: quote_dict}."""
     results = {}
     for symbol in symbols:
-        results[symbol] = get_quote(client, symbol)
-        time.sleep(0.1)
+        for attempt in range(3):   # retry up to 3x on transient errors
+            try:
+                results[symbol] = get_quote(client, symbol)
+                break
+            except Exception as e:
+                if attempt < 2:
+                    time.sleep(0.5 * (attempt + 1))   # back off: 0.5s, 1.0s
+                else:
+                    results[symbol] = {}
+        time.sleep(0.25)   # 4 req/sec max — well under Schwab's 120/min limit
     return results
 
 
@@ -162,7 +182,7 @@ def get_vix_history(client, days: int = 30) -> pd.DataFrame:
         end   = datetime.now()
         start = end - timedelta(days=days + 10)
 
-        resp = client.get_price_history(
+        resp = _retry(client.get_price_history,
             VIX_SYMBOL,
             period_type=client.PriceHistory.PeriodType.MONTH,
             period=client.PriceHistory.Period.ONE_MONTH,
@@ -503,8 +523,16 @@ def collect_snapshot(client, symbols: list = None) -> dict:
     print("  Fetching price history...")
     price_history = {}
     for sym in symbols:
-        price_history[sym] = get_price_history(client, sym, days=60)
-        time.sleep(0.1)
+        for attempt in range(3):
+            try:
+                price_history[sym] = get_price_history(client, sym, days=60)
+                break
+            except Exception as e:
+                if attempt < 2:
+                    time.sleep(0.5 * (attempt + 1))
+                else:
+                    price_history[sym] = pd.DataFrame()
+        time.sleep(0.3)   # ~3 req/sec for price history (heavier endpoint)
 
     print("  Fetching UW options flow...")
     uw_flow = get_uw_flow_for_universe(symbols)

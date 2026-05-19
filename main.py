@@ -29,7 +29,7 @@ from data_collector import (
     get_quotes, DEFAULT_UNIVERSE, get_dp_thresholds_bulk,
 )
 from regime_engine import evaluate_regime
-from macro_sentinel import evaluate_macro, print_macro_report, print_regime_summary
+from macro_sentinel import evaluate_macro, print_macro_report
 from cash_manager import evaluate_cash, get_parking_trades, print_parking_plan
 from risk_manager import run_risk_checks
 from flow_momentum import run_scoring_cycle, print_cycle_result, StockScore
@@ -303,7 +303,6 @@ def run_cycle(client):
 
     # ── Step 2: Regime ────────────────────────────────────────────────────────
     regime_state = evaluate_regime(vixy, vix_hist, term_structure)
-    print_regime_summary(regime_state)
 
     if regime_state.in_pause:
         print("  ⏸  Regime just switched — sitting out this cycle")
@@ -335,6 +334,14 @@ def run_cycle(client):
 
     if cycle_action == 'premarket_scan' and not weekend:
         print("\n🌅 Pre-market scan — scoring full 141-symbol universe...")
+
+        # ── Macro sentinel -- fresh leading indicator read ─────────────
+        try:
+            macro = evaluate_macro(use_cache=False)
+            print_macro_report(macro)
+        except Exception as e:
+            print(f'  [macro] Premarket sentinel failed: {e}')
+
         from pre_market_scanner import run_scan
         run_scan(client)
         log_cycle({'event': 'premarket_scan', 'regime': regime_state.regime,
@@ -720,10 +727,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-    # ── Macro sentinel -- leading indicators ──────────────────────────────
-    try:
-        macro = evaluate_macro(use_cache=False)   # fresh fetch in premarket
-        print_macro_report(macro)
-    except Exception as e:
-        print(f'  [macro] Premarket fetch failed: {e}')
