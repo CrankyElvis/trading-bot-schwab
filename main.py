@@ -18,6 +18,7 @@ Cycle order:
 
 import time
 import json
+import pandas as pd
 import os
 from datetime import datetime, timezone, timedelta
 import pytz
@@ -469,7 +470,6 @@ def run_cycle(client):
     portfolio    = load_portfolio()
     price_hist   = snapshot.get('price_history', {})
     uw_flow_frames = [df for df in snapshot.get('uw_flow', {}).values() if not df.empty]
-    import pandas as pd
     combined_flow = pd.concat(uw_flow_frames, ignore_index=True) if uw_flow_frames else pd.DataFrame()
     dp_df        = snapshot.get('uw_darkpool', pd.DataFrame())
 
