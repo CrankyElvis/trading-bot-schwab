@@ -1126,6 +1126,18 @@ def compile_results(portfolio, start, end, capital) -> dict:
              'regime':        s.regime}
             for s in snaps
         ],
+        'trades': [
+            {'symbol':      t.symbol,
+             'action':      t.action,
+             'shares':      t.shares,
+             'price':       round(t.price, 2),
+             'pnl':         round(t.pnl, 2),
+             'exit_date':   str(t.date)[:10] if t.date else '',
+             'hold_days':   t.hold_days,
+             'exit_reason': t.exit_reason,
+             'regime':      t.regime}
+            for t in trades if t.action == 'SELL'
+        ],
     }
 
 
@@ -1335,6 +1347,27 @@ def print_results(results, recs):
         print(f"  {sig:<16} {d['current_weight']:>5.2f} "
               f"{d['edge']:>+6.3f}  {d['pnl_correlation']:>+6.3f}  "
               f"{d['avg_score_wins']:>6.3f}  {d['avg_score_losses']:>6.3f}")
+
+    # ── Top 10 Best and Worst Trades ──────────────────────────────────────────
+    trade_list = results.get('trades', [])
+    if trade_list:
+        sorted_trades = sorted(trade_list, key=lambda t: t['pnl'], reverse=True)
+        best  = sorted_trades[:10]
+        worst = sorted_trades[-10:][::-1]
+
+        print(f"\n  ── Top 10 Best Trades ────────────────────────────────")
+        print(f"  {'Symbol':<8} {'Exit':<12} {'Hold':>5} {'P&L':>10} {'Reason':<20} {'Regime'}")
+        print(f"  {'-'*68}")
+        for t in best:
+            print(f"  {t['symbol']:<8} {t['exit_date']:<12} {t['hold_days']:>5}d "
+                  f"${t['pnl']:>+10,.0f}  {t['exit_reason']:<20} {t['regime']}")
+
+        print(f"\n  ── Top 10 Worst Trades ───────────────────────────────")
+        print(f"  {'Symbol':<8} {'Exit':<12} {'Hold':>5} {'P&L':>10} {'Reason':<20} {'Regime'}")
+        print(f"  {'-'*68}")
+        for t in worst:
+            print(f"  {t['symbol']:<8} {t['exit_date']:<12} {t['hold_days']:>5}d "
+                  f"${t['pnl']:>+10,.0f}  {t['exit_reason']:<20} {t['regime']}")
 
     print(f"\n  ── Weekly Returns ────────────────────────────────────")
     print(f"  {'Week':<12} {'Ret%':>8}  {'End Val':>10}  {'Compound':>10}  VIX  Regime")
@@ -2562,6 +2595,18 @@ def compile_results(portfolio, start, end, capital) -> dict:
              'regime':        s.regime}
             for s in snaps
         ],
+        'trades': [
+            {'symbol':      t.symbol,
+             'action':      t.action,
+             'shares':      t.shares,
+             'price':       round(t.price, 2),
+             'pnl':         round(t.pnl, 2),
+             'exit_date':   str(t.date)[:10] if t.date else '',
+             'hold_days':   t.hold_days,
+             'exit_reason': t.exit_reason,
+             'regime':      t.regime}
+            for t in trades if t.action == 'SELL'
+        ],
     }
 
 
@@ -2771,6 +2816,27 @@ def print_results(results, recs):
         print(f"  {sig:<16} {d['current_weight']:>5.2f} "
               f"{d['edge']:>+6.3f}  {d['pnl_correlation']:>+6.3f}  "
               f"{d['avg_score_wins']:>6.3f}  {d['avg_score_losses']:>6.3f}")
+
+    # ── Top 10 Best and Worst Trades ──────────────────────────────────────────
+    trade_list = results.get('trades', [])
+    if trade_list:
+        sorted_trades = sorted(trade_list, key=lambda t: t['pnl'], reverse=True)
+        best  = sorted_trades[:10]
+        worst = sorted_trades[-10:][::-1]
+
+        print(f"\n  ── Top 10 Best Trades ────────────────────────────────")
+        print(f"  {'Symbol':<8} {'Exit':<12} {'Hold':>5} {'P&L':>10} {'Reason':<20} {'Regime'}")
+        print(f"  {'-'*68}")
+        for t in best:
+            print(f"  {t['symbol']:<8} {t['exit_date']:<12} {t['hold_days']:>5}d "
+                  f"${t['pnl']:>+10,.0f}  {t['exit_reason']:<20} {t['regime']}")
+
+        print(f"\n  ── Top 10 Worst Trades ───────────────────────────────")
+        print(f"  {'Symbol':<8} {'Exit':<12} {'Hold':>5} {'P&L':>10} {'Reason':<20} {'Regime'}")
+        print(f"  {'-'*68}")
+        for t in worst:
+            print(f"  {t['symbol']:<8} {t['exit_date']:<12} {t['hold_days']:>5}d "
+                  f"${t['pnl']:>+10,.0f}  {t['exit_reason']:<20} {t['regime']}")
 
     print(f"\n  ── Weekly Returns ────────────────────────────────────")
     print(f"  {'Week':<12} {'Ret%':>8}  {'End Val':>10}  {'Compound':>10}  VIX  Regime")
