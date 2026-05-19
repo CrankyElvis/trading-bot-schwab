@@ -880,8 +880,9 @@ def get_sec_form4(symbol: str, days: int = 30) -> dict:
 
         for hit in hits[:20]:
             src   = hit.get('_source', {})
-            # Form 4 period_of_report or filed date
-            filed = src.get('period_of_report', src.get('file_date', ''))
+            # Use file_date (when filing became public) not period_of_report (trade date)
+            # File date = public disclosure date; period_of_report = private trade date
+            filed = src.get('file_date', src.get('period_of_report', ''))
             name  = src.get('display_names', [''])[0] if src.get('display_names') else ''
 
             # Heuristic: check for buy/sell indicators in filing text
@@ -1110,7 +1111,15 @@ def get_congress_trades(symbol: str, days: int = 90) -> dict:
             if ticker != sym_upper or ticker == '--':
                 continue
 
-            tx_date = tx.get('transaction_date', tx.get('date_recieved', ''))
+            # Key off disclosure/filing date, NOT transaction date
+            # Congress has up to 45 days to disclose — we only know on filing date
+            # House API: disclosure_date = when filed with clerk (public)
+            # Senate API: date_recieved = when Senate received disclosure (public)
+            # Fall back to transaction_date only if no disclosure date available
+            tx_date = (tx.get('disclosure_date') or
+                       tx.get('date_recieved') or
+                       tx.get('filed_at') or
+                       tx.get('transaction_date', ''))
             if not tx_date or tx_date < cutoff_90d:
                 continue
 
