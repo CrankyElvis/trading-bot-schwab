@@ -756,7 +756,8 @@ def run_backtest(client, start=None, end=None, capital=STARTING_CAPITAL, years=5
         blackout = (dt.month == 12 and dt.day >= 15) or                    (dt.month == 1  and dt.day <= 5)
 
         # ── PROTECTION 3: Fast VIX spike — cut sizing 50% ────────────────────
-        vix_spike_flag = False
+        vix_spike_flag          = False
+        _circuit_breaker_tripped = False
         if i >= 5:
             vix_5d_ago = float(vix_df.iloc[max(0,i-5)]['vix'])
             if vix_5d_ago > 0 and (vix - vix_5d_ago) / vix_5d_ago >= 0.30:
@@ -804,8 +805,8 @@ def run_backtest(client, start=None, end=None, capital=STARTING_CAPITAL, years=5
         max_new = min(MAX_CANDIDATES, MAX_POSITIONS - len(open_trading))
 
         # Apply protective sizing reductions
-        if blackout or regime == 'crisis':
-            max_new = 0
+        if blackout or regime == 'crisis' or _circuit_breaker_tripped:
+            max_new = 0   # circuit breaker halts all new entries
         elif vix_spike_flag or drawdown_flag:
             max_new = max(1, max_new // 2)   # cut max candidates in half
 
@@ -900,6 +901,19 @@ def run_backtest(client, start=None, end=None, capital=STARTING_CAPITAL, years=5
         last_regime = regime
         peak_value  = max(peak_value, port_val)
         peak_10d    = peak_10d[1:] + [port_val]
+
+        # ── CIRCUIT BREAKER: halt new entries if down 10% in rolling 30 days ─
+        # Track 30-day rolling peak and block new trades if drawdown exceeds 10%
+        if not hasattr(portfolio, '_val_history'):
+            portfolio._val_history = []
+        portfolio._val_history.append(port_val)
+        if len(portfolio._val_history) > 30:
+            portfolio._val_history = portfolio._val_history[-30:]
+        _peak_30d = max(portfolio._val_history)
+        _circuit_breaker_tripped = (
+            len(portfolio._val_history) >= 10 and
+            port_val < _peak_30d * (1 - 0.10)
+        )
 
         # ── OVERNIGHT INDEX STRATEGY (corrected) ─────────────────────────────
         # Uses actual next-day open (or next close as proxy) for P&L calculation
@@ -2225,7 +2239,8 @@ def run_backtest(client, start=None, end=None, capital=STARTING_CAPITAL, years=5
         blackout = (dt.month == 12 and dt.day >= 15) or                    (dt.month == 1  and dt.day <= 5)
 
         # ── PROTECTION 3: Fast VIX spike — cut sizing 50% ────────────────────
-        vix_spike_flag = False
+        vix_spike_flag          = False
+        _circuit_breaker_tripped = False
         if i >= 5:
             vix_5d_ago = float(vix_df.iloc[max(0,i-5)]['vix'])
             if vix_5d_ago > 0 and (vix - vix_5d_ago) / vix_5d_ago >= 0.30:
@@ -2273,8 +2288,8 @@ def run_backtest(client, start=None, end=None, capital=STARTING_CAPITAL, years=5
         max_new = min(MAX_CANDIDATES, MAX_POSITIONS - len(open_trading))
 
         # Apply protective sizing reductions
-        if blackout or regime == 'crisis':
-            max_new = 0
+        if blackout or regime == 'crisis' or _circuit_breaker_tripped:
+            max_new = 0   # circuit breaker halts all new entries
         elif vix_spike_flag or drawdown_flag:
             max_new = max(1, max_new // 2)   # cut max candidates in half
 
@@ -2369,6 +2384,19 @@ def run_backtest(client, start=None, end=None, capital=STARTING_CAPITAL, years=5
         last_regime = regime
         peak_value  = max(peak_value, port_val)
         peak_10d    = peak_10d[1:] + [port_val]
+
+        # ── CIRCUIT BREAKER: halt new entries if down 10% in rolling 30 days ─
+        # Track 30-day rolling peak and block new trades if drawdown exceeds 10%
+        if not hasattr(portfolio, '_val_history'):
+            portfolio._val_history = []
+        portfolio._val_history.append(port_val)
+        if len(portfolio._val_history) > 30:
+            portfolio._val_history = portfolio._val_history[-30:]
+        _peak_30d = max(portfolio._val_history)
+        _circuit_breaker_tripped = (
+            len(portfolio._val_history) >= 10 and
+            port_val < _peak_30d * (1 - 0.10)
+        )
 
         # ── OVERNIGHT INDEX STRATEGY (corrected) ─────────────────────────────
         # Uses actual next-day open (or next close as proxy) for P&L calculation
