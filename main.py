@@ -28,7 +28,8 @@ from data_collector import (
     get_vix_term_structure, get_price_history,
     get_quotes, DEFAULT_UNIVERSE, get_dp_thresholds_bulk,
 )
-from regime_engine import evaluate_regime, print_regime_summary
+from regime_engine import evaluate_regime
+from macro_sentinel import evaluate_macro, print_macro_report, print_regime_summary
 from cash_manager import evaluate_cash, get_parking_trades, print_parking_plan
 from risk_manager import run_risk_checks
 from flow_momentum import run_scoring_cycle, print_cycle_result, StockScore
@@ -719,3 +720,10 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+    # ── Macro sentinel -- leading indicators ──────────────────────────────
+    try:
+        macro = evaluate_macro(use_cache=False)   # fresh fetch in premarket
+        print_macro_report(macro)
+    except Exception as e:
+        print(f'  [macro] Premarket fetch failed: {e}')

@@ -23,6 +23,7 @@ Position sizing (inverse VIXY scale):
 import json
 import os
 from datetime import datetime
+from macro_sentinel import evaluate_macro, apply_macro_override, print_macro_report
 from dataclasses import dataclass, asdict
 
 STATE_FILE = 'regime_state.json'
@@ -39,6 +40,9 @@ class RegimeState:
     updated_at: str         # ISO timestamp
     term_signal: str        # VIX term structure signal: contango/flat/backwardation/inversion
     halt_entries: bool      # True = term structure says halt new entries
+    macro_score: float = 0.0   # macro sentinel composite score 0.0-1.0
+    macro_warning: str = 'green'  # 'green' | 'yellow' | 'red'
+    macro_override: bool = False  # True if macro upgraded the regime
 
 
 # ── Core Logic ───────────────────────────────────────────────────────────────
@@ -172,6 +176,22 @@ def evaluate_regime(vixy: float, vix_history_df,
         term_signal=ts_signal,
         halt_entries=halt_entries,
     )
+
+
+    # ── Macro sentinel override ──────────────────────────────────────────
+    try:
+        macro = evaluate_macro(use_cache=True)
+        final_regime, was_overridden, reason = apply_macro_override(state.regime, macro)
+        if was_overridden:
+            print(f'  [macro] {reason}')
+            state.regime        = final_regime
+            state.position_size = get_position_size(
+                max(state.vixy, 25.0 if final_regime == 'volatility' else state.vixy))
+        state.macro_score    = macro.score
+        state.macro_warning  = macro.warning
+        state.macro_override = was_overridden
+    except Exception as e:
+        print(f'  [macro] Sentinel unavailable: {e}')
 
     _save_state(state)
     return state
