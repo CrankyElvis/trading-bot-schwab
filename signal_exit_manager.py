@@ -53,7 +53,7 @@ CRISIS_PROFIT_PCT     = 0.08
 COVERED_CALL_TRIGGER  = 0.15   # switch to CC exit when position up 15%
 COVERED_CALL_OTM      = 0.03   # sell call 3% OTM
 COVERED_CALL_DTE      = 14     # 2-week expiry for fast theta harvest
-COVERED_CALL_HARD_EXIT = 0.25  # if position up 25%+ and no CC possible, hard exit
+COVERED_CALL_HARD_EXIT = 0.40  # if position up 40%+ and no CC possible, hard exit
 
 # Distribution day exit
 DISTRIBUTION_DOWN_PCT = 0.02   # price down >2% intraday
@@ -310,13 +310,23 @@ def check_covered_call_exit(
 
     pnl_pct = (current_price - avg_price) / avg_price
 
-    # Only trigger in the CC zone: +15% to +25%
-    in_cc_zone = COVERED_CALL_TRIGGER <= pnl_pct < COVERED_CALL_HARD_EXIT
+    # CC zone: +15% to +40% (raised from 25% to capture big winners)
+    # If position > 25% with round lots, prefer CC over hard exit
+    has_round_lot = qty >= 100
+    in_cc_zone = COVERED_CALL_TRIGGER <= pnl_pct < 0.40
 
     if not in_cc_zone:
         return False, {
             'pnl_pct':    f'{pnl_pct*100:.2f}%',
             'cc_trigger': f'+{COVERED_CALL_TRIGGER*100:.0f}%',
+            'in_zone':    False,
+        }
+
+    # Above 25% with no round lot — can't sell CC, signal hard exit
+    if pnl_pct >= COVERED_CALL_HARD_EXIT and not has_round_lot:
+        return False, {
+            'pnl_pct':    f'{pnl_pct*100:.2f}%',
+            'reason':     'above_25pct_odd_lot',
             'in_zone':    False,
         }
 
@@ -572,7 +582,7 @@ def check_signal_exits(
             ))
             continue
 
-        # ── 3. Hard take profit backup (if CC not possible or position >25%) ──
+        # ── 3. Hard take profit backup (if CC not possible or position >40%, or odd lot >25%) ──
         if hard_fired and hard_reason == 'take_profit':
             results.append(SignalExitResult(
                 symbol=symbol, should_exit=True, reason='take_profit',
