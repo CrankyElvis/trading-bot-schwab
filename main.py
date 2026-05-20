@@ -31,6 +31,7 @@ from data_collector import (
 )
 from regime_engine import evaluate_regime
 from macro_sentinel import evaluate_macro, print_macro_report
+from notifier import run_anomaly_checks, send_daily_summary
 from cash_manager import evaluate_cash, get_parking_trades, print_parking_plan
 from risk_manager import run_risk_checks
 from flow_momentum import run_scoring_cycle, print_cycle_result, StockScore
