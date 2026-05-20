@@ -144,10 +144,14 @@ def get_next_cycle() -> tuple:
     return wait, 'premarket', 'premarket_scan'
 
 
+# Track which cycles have already fired today
+_cycles_fired: set = set()
+
 def get_current_cycle() -> tuple:
     """
     Returns (cycle_name, action) for the current moment.
-    Used to determine what type of cycle to run right now.
+    Each named cycle only fires once per calendar day.
+    Returns ('sleep', 'sleep') if the current cycle already fired today.
     """
     now = datetime.now(ET)
 
@@ -160,6 +164,17 @@ def get_current_cycle() -> tuple:
         slot_dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
         if slot_dt <= now:
             last_name, last_action = name, action
+
+    # Gate: each cycle fires once per calendar day
+    today = now.strftime('%Y-%m-%d')
+    cycle_key = f"{today}_{last_name}"
+    if cycle_key in _cycles_fired:
+        return 'sleep', 'sleep'
+
+    _cycles_fired.add(cycle_key)
+    # Clean up old keys (keep only today's)
+    old_keys = {k for k in _cycles_fired if not k.startswith(today)}
+    _cycles_fired.difference_update(old_keys)
 
     return last_name, last_action
 
@@ -275,6 +290,9 @@ def execute_parking(client, plan, portfolio):
 def run_cycle(client):
     cycle_start              = datetime.now()
     cycle_name, cycle_action = get_current_cycle()
+    if cycle_action == 'sleep':
+        time.sleep(60)
+        return
 
     print(f"\n{'='*60}")
     print(f"  🤖 BOT CYCLE [{cycle_name.upper()}]  —  "

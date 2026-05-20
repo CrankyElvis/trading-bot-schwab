@@ -228,7 +228,7 @@ def run_scan(client) -> dict:
     price_cache = {}
     scored      = 0
 
-    for symbol in today_universe:
+    for symbol in SCAN_UNIVERSE:
         try:
             # Fetch price history (cache to avoid duplicate calls)
             if symbol not in price_cache:
