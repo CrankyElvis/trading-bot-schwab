@@ -599,7 +599,8 @@ class BacktestPortfolio:
         crisis     = (regime == 'crisis')
         flow       = (regime == 'flow')
         stop_pct   = CRISIS_STOP_PCT   if crisis else STOP_LOSS_PCT
-        profit_pct = dynamic_take_profit(regime, adx=spy_adx if 'spy_adx' in dir() else 0.0)
+        current_adx = compute_adx(spy_hist[spy_hist.index <= pd.Timestamp(date)].tail(60))
+        profit_pct = dynamic_take_profit(regime, adx=current_adx)
         exits      = []
 
         # Market tide check
@@ -2192,7 +2193,8 @@ class BacktestPortfolio:
         crisis     = (regime == 'crisis')
         flow       = (regime == 'flow')
         stop_pct   = CRISIS_STOP_PCT   if crisis else STOP_LOSS_PCT
-        profit_pct = dynamic_take_profit(regime, adx=spy_adx if 'spy_adx' in dir() else 0.0)
+        current_adx = compute_adx(spy_hist[spy_hist.index <= pd.Timestamp(date)].tail(60))
+        profit_pct = dynamic_take_profit(regime, adx=current_adx)
         exits      = []
 
         # Market tide check
