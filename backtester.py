@@ -36,7 +36,7 @@ MAX_CANDIDATES    = 4
 # Import live bot thresholds — stays in sync automatically
 try:
     from exit_manager import (
-        STOP_LOSS_PCT, TAKE_PROFIT_PCT,
+        STOP_LOSS_PCT, TAKE_PROFIT_PCT, dynamic_take_profit,
         MAX_HOLD_DAYS, CRISIS_STOP_PCT, CRISIS_PROFIT_PCT, CRISIS_HOLD_DAYS,
     )
     print(f"  Using live exit rules: stop={STOP_LOSS_PCT:.0%} profit={TAKE_PROFIT_PCT:.0%} hold={MAX_HOLD_DAYS}d")
@@ -297,6 +297,45 @@ def fetch_all_history(client, tickers: list, use_yfinance: bool = True, years: i
 
 
 # ── Signal Scorer ─────────────────────────────────────────────────────────────
+
+
+def compute_adx(df, period: int = 14) -> float:
+    """
+    Compute ADX from OHLCV DataFrame (Wilder method).
+    ADX < 20 = choppy market, skip entries.
+    Returns 0.0 if insufficient data.
+    """
+    try:
+        if df is None or len(df) < period + 5:
+            return 0.0
+        high  = df['high'].values.astype(float)
+        low   = df['low'].values.astype(float)
+        close = df['close'].values.astype(float)
+
+        tr, plus_dm, minus_dm = [], [], []
+        for i in range(1, len(close)):
+            tr.append(max(high[i]-low[i], abs(high[i]-close[i-1]), abs(low[i]-close[i-1])))
+            up   = high[i] - high[i-1]
+            down = low[i-1] - low[i]
+            plus_dm.append(up   if up > down and up > 0   else 0.0)
+            minus_dm.append(down if down > up and down > 0 else 0.0)
+
+        def wilder(vals, n):
+            r = [sum(vals[:n])]
+            for v in vals[n:]: r.append(r[-1] - r[-1]/n + v)
+            return r
+
+        atr  = wilder(tr, period)
+        p_dm = wilder(plus_dm, period)
+        m_dm = wilder(minus_dm, period)
+        di_p = [100*p/a if a>0 else 0 for p,a in zip(p_dm, atr)]
+        di_m = [100*m/a if a>0 else 0 for m,a in zip(m_dm, atr)]
+        dx   = [abs(p-m)/(p+m)*100 if (p+m)>0 else 0 for p,m in zip(di_p, di_m)]
+        adx  = wilder(dx, period)
+        return round(adx[-1], 1) if adx else 0.0
+    except Exception:
+        return 0.0
+
 
 def score_symbol(symbol, date, history, spy_hist, vix) -> tuple:
     """
@@ -560,7 +599,7 @@ class BacktestPortfolio:
         crisis     = (regime == 'crisis')
         flow       = (regime == 'flow')
         stop_pct   = CRISIS_STOP_PCT   if crisis else STOP_LOSS_PCT
-        profit_pct = CRISIS_PROFIT_PCT if crisis else                      0.20              if flow   else TAKE_PROFIT_PCT
+        profit_pct = dynamic_take_profit(regime, adx=spy_adx if 'spy_adx' in dir() else 0.0)
         exits      = []
 
         # Market tide check
@@ -817,6 +856,12 @@ def run_backtest(client, start=None, end=None, capital=STARTING_CAPITAL, years=5
             max_new = max(1, max_new // 2)   # cut max candidates in half
 
         if max_new > 0 and i >= 30:
+            # ADX filter — skip entries in choppy/sideways market
+            spy_slice = spy_hist[spy_hist.index <= pd.Timestamp(date)]
+            spy_adx   = compute_adx(spy_slice.tail(60))
+            if spy_adx > 0 and spy_adx < 20:
+                max_new = max(1, max_new // 2)   # halve candidates in choppy market
+
             scores = {}
             for symbol in UNIVERSE:
                 if symbol in portfolio.positions or symbol not in prices:
@@ -1620,7 +1665,7 @@ MAX_CANDIDATES    = 4
 # Import live bot thresholds — stays in sync automatically
 try:
     from exit_manager import (
-        STOP_LOSS_PCT, TAKE_PROFIT_PCT,
+        STOP_LOSS_PCT, TAKE_PROFIT_PCT, dynamic_take_profit,
         MAX_HOLD_DAYS, CRISIS_STOP_PCT, CRISIS_PROFIT_PCT, CRISIS_HOLD_DAYS,
     )
     print(f"  Using live exit rules: stop={STOP_LOSS_PCT:.0%} profit={TAKE_PROFIT_PCT:.0%} hold={MAX_HOLD_DAYS}d")
@@ -2147,7 +2192,7 @@ class BacktestPortfolio:
         crisis     = (regime == 'crisis')
         flow       = (regime == 'flow')
         stop_pct   = CRISIS_STOP_PCT   if crisis else STOP_LOSS_PCT
-        profit_pct = CRISIS_PROFIT_PCT if crisis else                      0.20              if flow   else TAKE_PROFIT_PCT
+        profit_pct = dynamic_take_profit(regime, adx=spy_adx if 'spy_adx' in dir() else 0.0)
         exits      = []
 
         # Market tide check
@@ -2404,6 +2449,12 @@ def run_backtest(client, start=None, end=None, capital=STARTING_CAPITAL, years=5
             max_new = max(1, max_new // 2)   # cut max candidates in half
 
         if max_new > 0 and i >= 30:
+            # ADX filter — skip entries in choppy/sideways market
+            spy_slice = spy_hist[spy_hist.index <= pd.Timestamp(date)]
+            spy_adx   = compute_adx(spy_slice.tail(60))
+            if spy_adx > 0 and spy_adx < 20:
+                max_new = max(1, max_new // 2)   # halve candidates in choppy market
+
             scores = {}
             for symbol in UNIVERSE:
                 if symbol in portfolio.positions or symbol not in prices:

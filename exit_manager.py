@@ -19,13 +19,43 @@ from dataclasses import dataclass, field
 
 # ── Thresholds ────────────────────────────────────────────────────────────────
 
-STOP_LOSS_PCT    = 0.05   # tightened from 7% — stop losses averaging -$444    # 7%
-TAKE_PROFIT_PCT  = 0.15    # 15%
+STOP_LOSS_PCT    = 0.05   # 5% base stop loss
+TAKE_PROFIT_PCT  = 0.15   # 15% base take profit
 MAX_HOLD_DAYS    = 5
 
 CRISIS_STOP_PCT    = 0.05  # 5%
-CRISIS_PROFIT_PCT  = 0.08  # 8%
+CRISIS_PROFIT_PCT  = 0.08  # 8% -- lock in fast during crisis
 CRISIS_HOLD_DAYS   = 3
+
+
+def dynamic_take_profit(regime: str, adx: float = 0.0) -> float:
+    """
+    Dynamic take profit target based on regime and trend strength (ADX).
+
+    Logic:
+      Crisis:                    8%  -- lock in gains fast, market unstable
+      Volatility:               12%  -- slightly looser, more room to run
+      Neutral:                  15%  -- standard default
+      Flow (ADX < 25):          18%  -- flow regime, moderate trend
+      Flow (25 <= ADX < 35):    22%  -- flow regime, strong trend -- let winners run
+      Flow (ADX >= 35):         27%  -- flow regime, powerful trend -- maximum extension
+
+    This prevents premature exits in strong uptrends while protecting gains
+    in choppy or stressed markets.
+    """
+    if regime == 'crisis':
+        return 0.08
+    if regime == 'volatility':
+        return 0.12
+    if regime == 'flow':
+        if adx >= 35:
+            return 0.27
+        elif adx >= 25:
+            return 0.22
+        else:
+            return 0.18
+    # neutral
+    return 0.15
 
 
 # ── Result Container ──────────────────────────────────────────────────────────
@@ -49,6 +79,7 @@ def check_position_exit(
     current_price: float,
     regime:        str = 'neutral',
     trade_log:     list = None,
+    adx:           float = 0.0,
 ) -> ExitSignal:
     """
     Checks a single position against all three exit rules.
@@ -67,7 +98,7 @@ def check_position_exit(
     volatility  = (regime == 'volatility')
 
     stop_pct   = CRISIS_STOP_PCT      if crisis     else STOP_LOSS_PCT
-    profit_pct = CRISIS_PROFIT_PCT    if crisis     else TAKE_PROFIT_PCT
+    profit_pct = dynamic_take_profit(regime, adx=adx)
     max_days   = CRISIS_HOLD_DAYS     if crisis     else                  VOLATILITY_HOLD_DAYS if volatility else MAX_HOLD_DAYS
 
     avg_price = position.get('avg_price', current_price)

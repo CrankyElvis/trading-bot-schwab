@@ -44,8 +44,8 @@ MIN_FLOW_PREMIUM      = 100_000 # minimum sweep premium to count as active flow
 
 # Hard safety rails
 STOP_LOSS_PCT         = 0.05   # tightened from 7% — stop losses averaging -$444
-TAKE_PROFIT_FLOW      = 0.20   # 20% in flow regime (hard backup)
-TAKE_PROFIT_DEFAULT   = 0.15   # 15% in neutral (hard backup)
+TAKE_PROFIT_FLOW      = 0.20   # legacy -- now overridden by dynamic_take_profit()
+TAKE_PROFIT_DEFAULT   = 0.15   # legacy -- now overridden by dynamic_take_profit()
 CRISIS_STOP_PCT       = 0.05
 CRISIS_PROFIT_PCT     = 0.08
 
@@ -382,8 +382,7 @@ def check_hard_stops(
     flow    = (regime == 'flow')
 
     stop_pct   = CRISIS_STOP_PCT   if crisis else STOP_LOSS_PCT
-    profit_pct = CRISIS_PROFIT_PCT if crisis else \
-                 TAKE_PROFIT_FLOW  if flow   else TAKE_PROFIT_DEFAULT
+    profit_pct = dynamic_take_profit(regime, adx=kwargs.get('adx', 0.0))
 
     if pnl_pct <= -stop_pct:
         return True, 'stop_loss', {
@@ -444,6 +443,7 @@ def check_signal_exits(
     uw_flow_df:    pd.DataFrame,
     dp_df:         pd.DataFrame,
     regime:        str = 'neutral',
+    adx:           float = 0.0,
 ) -> list[SignalExitResult]:
     """
     Checks all open positions against signal-based exit conditions.
