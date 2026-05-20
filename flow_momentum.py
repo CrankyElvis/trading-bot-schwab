@@ -43,6 +43,63 @@ UW_BASE_URL = 'https://api.unusualwhales.com/api'
 
 MIN_SCORE           = 0.80   # raised from 0.75 — win rate needs improvement
 MAX_CANDIDATES      = 4      # base — overridden dynamically by get_max_candidates()
+ADX_THRESHOLD       = 20     # below this = choppy/sideways market, skip entries
+
+
+def compute_adx(df: 'pd.DataFrame', period: int = 14) -> float:
+    """
+    Compute Average Directional Index (ADX) from OHLCV DataFrame.
+    ADX < 20 = choppy/sideways (no trend) -- skip entries
+    ADX 20-25 = weak trend forming
+    ADX > 25 = strong trend -- best for momentum
+    Returns 0.0 if insufficient data.
+    """
+    try:
+        if df is None or len(df) < period + 5:
+            return 0.0
+        high  = df['high'].values.astype(float)
+        low   = df['low'].values.astype(float)
+        close = df['close'].values.astype(float)
+
+        # True Range
+        tr = []
+        for i in range(1, len(close)):
+            tr.append(max(
+                high[i] - low[i],
+                abs(high[i] - close[i-1]),
+                abs(low[i]  - close[i-1])
+            ))
+
+        # Directional Movement
+        plus_dm, minus_dm = [], []
+        for i in range(1, len(close)):
+            up   = high[i] - high[i-1]
+            down = low[i-1] - low[i]
+            plus_dm.append(up   if up > down and up > 0   else 0.0)
+            minus_dm.append(down if down > up and down > 0 else 0.0)
+
+        # Smooth with Wilder's EMA
+        def wilder_smooth(vals, n):
+            result = [sum(vals[:n])]
+            for v in vals[n:]:
+                result.append(result[-1] - result[-1] / n + v)
+            return result
+
+        atr   = wilder_smooth(tr,       period)
+        p_dm  = wilder_smooth(plus_dm,  period)
+        m_dm  = wilder_smooth(minus_dm, period)
+
+        # DI+ and DI-
+        di_plus  = [100 * p / a if a > 0 else 0 for p, a in zip(p_dm, atr)]
+        di_minus = [100 * m / a if a > 0 else 0 for m, a in zip(m_dm, atr)]
+
+        # DX and ADX
+        dx = [abs(p - m) / (p + m) * 100 if (p + m) > 0 else 0
+              for p, m in zip(di_plus, di_minus)]
+        adx = wilder_smooth(dx, period)
+        return round(adx[-1], 1) if adx else 0.0
+    except Exception:
+        return 0.0
 
 # Dynamic candidate scaling — grows with portfolio
 CANDIDATE_TIERS = [
