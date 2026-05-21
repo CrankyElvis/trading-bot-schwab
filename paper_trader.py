@@ -190,12 +190,14 @@ def paper_buy(client, symbol, quantity, contracts: int = 0):
             'quantity':   total_qty,
             'avg_price':  round(avg_price, 4),
             'cost_basis': round(avg_price * total_qty, 2),
+            'source':     existing.get('source', 'standard'),  # preserve source tag
         }
     else:
         portfolio['positions'][symbol] = {
             'quantity':   quantity,
             'avg_price':  fill_price,
             'cost_basis': round(fill_price * quantity, 2),
+            'source':     'standard',  # overridden by caller if politician/wsb
         }
 
     trade = {
@@ -246,7 +248,7 @@ def paper_sell(client, symbol, quantity, contracts: int = 0):
 
     fill_price     = price_data['bid'] if price_data['bid'] > 0 else price_data['last']
     trade_value    = fill_price * quantity
-    fees           = estimate_fees(trade_value, contracts)
+    fees           = estimate_fees(trade_value, contracts, symbol)
     total_proceeds = round(trade_value - fees['total_fees'], 4)
     profit_loss    = round((fill_price - position['avg_price']) * quantity - fees['total_fees'], 4)
 
@@ -339,7 +341,8 @@ def print_portfolio_summary(client):
 
 
 if __name__ == '__main__':
-    client, paper = authenticate()
+    client = authenticate()
+    paper = True  # assume paper mode
 
     if not os.path.exists(PAPER_PORTFOLIO_FILE):
         initialize_portfolio(starting_cash=25000.00)

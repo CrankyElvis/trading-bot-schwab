@@ -2,13 +2,14 @@
 regime_engine.py
 Detects the current market regime using VIXY (VIX proxy) vs its 30-day
 rolling average, then outputs:
-  - regime:        'flow' | 'neutral' | 'volatility' | 'crisis'
+  - regime:        'flow' | 'neutral' | 'volatility-cautious' | 'volatility-defensive' | 'crisis'
   - position_size: scalar 0.0–1.0 (fraction of max capital per trade)
   - in_pause:      True if we just switched regimes (sit out 1 cycle)
 
 Regime rules:
   VIXY > 40 (absolute)           →  crisis     (cash/inverse only, 10% size)
-  VIXY > 30d avg * 1.15          →  volatility (sell premium, tight sizes)
+  VIXY ratio 1.15-1.30 + SPY>EMA →  volatility-cautious (reduced sizing)
+  VIXY ratio > 1.30 OR SPY<EMA    →  volatility-defensive (no new entries)
   VIXY < 30d avg * 0.85          →  flow       (ride momentum, full sizes)
   otherwise                      →  neutral    (reduced sizing, flow signals only)
 
@@ -31,7 +32,7 @@ STATE_FILE = 'regime_state.json'
 
 @dataclass
 class RegimeState:
-    regime: str             # 'flow' | 'neutral' | 'volatility' | 'crisis'
+    regime: str             # 'flow' | 'neutral' | 'volatility-cautious' | 'volatility-defensive' | 'crisis'
     vixy: float             # current VIXY price
     vixy_30d_avg: float     # 30-day rolling average
     position_size: float    # 0.0 – 1.0
@@ -47,10 +48,15 @@ class RegimeState:
 
 # ── Core Logic ───────────────────────────────────────────────────────────────
 
-def detect_regime(vixy: float, vixy_30d_avg: float) -> str:
+def detect_regime(vixy: float, vixy_30d_avg: float,
+                  spy_price: float = 0.0, spy_ema50: float = 0.0) -> str:
     """
     Compares current VIXY level and ratio to 30-day average.
     Crisis takes priority over all other signals — absolute VIXY > 40.
+
+    Volatility split (mirrors backtester #26):
+      volatility-defensive: ratio > 1.30 OR SPY below 50d EMA → no new entries
+      volatility-cautious:  ratio 1.15-1.30 AND SPY above 50d EMA → reduced sizing
     """
     if vixy_30d_avg <= 0:
         return 'neutral'
@@ -62,7 +68,10 @@ def detect_regime(vixy: float, vixy_30d_avg: float) -> str:
     ratio = vixy / vixy_30d_avg
 
     if ratio > 1.15:
-        return 'volatility'
+        spy_below_ema = (spy_price > 0 and spy_ema50 > 0 and spy_price < spy_ema50)
+        if ratio > 1.30 or spy_below_ema:
+            return 'volatility-defensive'
+        return 'volatility-cautious'
     elif ratio < 0.85:
         return 'flow'
     else:
@@ -142,7 +151,25 @@ def evaluate_regime(vixy: float, vix_history_df,
         print("  [!] No VIXY history available — defaulting to neutral regime")
         vixy_30d_avg = vixy   # treat current as average
 
-    new_regime = detect_regime(vixy, vixy_30d_avg)
+    # SPY 50d EMA for volatility split (cautious vs defensive)
+    spy_price = 0.0
+    spy_ema50 = 0.0
+    try:
+        import yfinance as yf
+        spy_df = yf.download('SPY', period='60d', interval='1d',
+                              auto_adjust=True, progress=False, threads=False)
+        if spy_df is not None and not spy_df.empty:
+            closes = spy_df['Close']
+            if hasattr(closes, 'columns'):
+                closes = closes.iloc[:, 0]
+            closes = closes.dropna()
+            if len(closes) >= 10:
+                spy_price = float(closes.iloc[-1])
+                spy_ema50 = float(closes.ewm(span=50, adjust=False).mean().iloc[-1])
+    except Exception:
+        pass  # SPY unavailable — detect_regime defaults to cautious (safer)
+
+    new_regime = detect_regime(vixy, vixy_30d_avg, spy_price, spy_ema50)
 
     # VIX term structure override: backwardation = upgrade to volatility regime
     if term_structure and new_regime not in ('crisis',):
@@ -151,8 +178,8 @@ def evaluate_regime(vixy: float, vix_history_df,
             new_regime = 'neutral'
             print(f"  ⚠️  Term structure backwardation — upgrading flow→neutral")
         elif ts_signal in ('backwardation', 'inversion') and new_regime == 'neutral':
-            new_regime = 'volatility'
-            print(f"  ⚠️  Term structure {ts_signal} — upgrading neutral→volatility")
+            new_regime = 'volatility-cautious'
+            print(f"  ⚠️  Term structure {ts_signal} — upgrading neutral→volatility-cautious")
 
     position_size = get_position_size(vixy)
 
@@ -186,7 +213,7 @@ def evaluate_regime(vixy: float, vix_history_df,
             print(f'  [macro] {reason}')
             state.regime        = final_regime
             state.position_size = get_position_size(
-                max(state.vixy, 25.0 if final_regime == 'volatility' else state.vixy))
+                max(state.vixy, 25.0 if final_regime in ('volatility-cautious', 'volatility-defensive') else state.vixy))
         state.macro_score    = macro.score
         state.macro_warning  = macro.warning
         state.macro_override = was_overridden
@@ -198,7 +225,7 @@ def evaluate_regime(vixy: float, vix_history_df,
 
 
 def print_regime_summary(state: RegimeState):
-    icons = {'flow': '🟢', 'volatility': '🔴', 'neutral': '🟡', 'crisis': '🚨'}
+    icons = {'flow': '🟢', 'neutral': '🟡', 'crisis': '🚨', 'volatility-cautious': '🟠', 'volatility-defensive': '🔴'}
     icon = icons.get(state.regime, '⚪')
     pause_str = '  ⏸  PAUSE CYCLE (regime just switched)' if state.in_pause else ''
 
@@ -223,7 +250,8 @@ if __name__ == '__main__':
     from data_collector import get_vix, get_vix_history
 
     print("🔌 Authenticating...")
-    client, paper = authenticate()
+    client = authenticate()
+    paper = True  # assume paper mode
     print(f"✅ Connected ({'PAPER' if paper else 'LIVE'} mode)\n")
 
     print("📡 Fetching VIXY data...")

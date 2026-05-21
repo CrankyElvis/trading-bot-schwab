@@ -169,27 +169,51 @@ def check_vix_spike(vix: float, threshold: float = 35.0) -> bool:
 
 
 def check_bot_restart(log_entries: list) -> bool:
-    """Alert if bot restarted in last 5 minutes (crash detection)."""
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
-    for entry in log_entries:
-        ts_str = entry.get('timestamp', '')
-        if ts_str and entry.get('event') == 'startup':
+    """
+    Detect bot restart by finding a gap > 15 min between log entries
+    during market hours, or by detecting the first entry after a silence.
+    main.py does not log a 'startup' event explicitly — detect via log gaps.
+    """
+    if len(log_entries) < 2:
+        return False
+    try:
+        # Parse all timestamps in order
+        times = []
+        for entry in log_entries:
+            ts_str = entry.get('timestamp', '')
+            if not ts_str:
+                continue
             try:
                 ts = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
                 if ts.tzinfo is None:
                     ts = ts.replace(tzinfo=timezone.utc)
-                if ts > cutoff:
-                    body = (
-                        f'BOT RESTART DETECTED\n\n'
-                        f'Bot restarted at {ts.strftime("%Y-%m-%d %H:%M ET")}\n\n'
-                        f'This may indicate a crash. Check server logs:\n'
-                        f'  journalctl -u tradingbot -n 50 --no-pager\n\n'
-                        f'Server: 142.93.4.251'
-                    )
-                    send_email('Bot Restarted -- Possible Crash', body, 'CRITICAL')
-                    return True
+                times.append(ts)
             except Exception:
                 pass
+
+        if len(times) < 2:
+            return False
+
+        times.sort()
+        now = datetime.now(timezone.utc)
+        recent_cutoff = now - timedelta(minutes=30)
+
+        # Check for a large gap (> 15 min) followed by recent activity
+        for i in range(1, len(times)):
+            gap_min = (times[i] - times[i-1]).total_seconds() / 60
+            if gap_min > 15 and times[i] >= recent_cutoff:
+                body = (
+                    f'BOT RESTART DETECTED\n\n'
+                    f'Log gap of {gap_min:.0f} minutes detected, followed by new activity.\n\n'
+                    f'Gap: {times[i-1].strftime("%H:%M ET")} -> {times[i].strftime("%H:%M ET")}\n\n'
+                    f'This may indicate a crash or restart. Check server logs:\n'
+                    f'  journalctl -u tradingbot -n 50 --no-pager\n\n'
+                    f'Server: 142.93.4.251'
+                )
+                send_email('Bot Restart Detected -- Log Gap', body, 'CRITICAL')
+                return True
+    except Exception:
+        pass
     return False
 
 
@@ -284,6 +308,16 @@ def run_anomaly_checks(portfolio: dict, regime: str = 'neutral',
 
 # ── Daily summary ─────────────────────────────────────────────────────────────
 
+def _safe_days_running(created_str: str) -> str:
+    try:
+        if not created_str:
+            return 'unknown'
+        dt = datetime.fromisoformat(created_str[:10])
+        return str((datetime.now() - dt).days)
+    except Exception:
+        return 'unknown'
+
+
 def send_daily_summary(portfolio: dict, regime_state=None,
                        macro_state=None, signals_today: list = None) -> bool:
     """
@@ -311,9 +345,14 @@ def send_daily_summary(portfolio: dict, regime_state=None,
     todays_sells  = [t for t in todays_trades if t.get('type') == 'SELL']
     todays_pnl    = sum(t.get('profit_loss', 0) for t in todays_sells)
 
-    # Regime info
-    regime    = regime_state.regime    if regime_state else 'unknown'
-    vixy      = regime_state.vixy      if regime_state else 0
+    # Regime info — handle both RegimeState object and plain string
+    if regime_state is None:
+        regime, vixy = 'unknown', 0.0
+    elif isinstance(regime_state, str):
+        regime, vixy = regime_state, 0.0
+    else:
+        regime = getattr(regime_state, 'regime', 'unknown')
+        vixy   = getattr(regime_state, 'vixy', 0.0)
     # Split positions by source
     standard_pos = {s: p for s, p in positions.items()
                     if p.get('source', 'standard') == 'standard'}
@@ -376,7 +415,7 @@ MACRO SENTINEL
 
 PAPER TRADING DAY
   Started:        {portfolio.get('created','unknown')[:10]}
-  Days running:   {(datetime.now() - datetime.fromisoformat(portfolio.get('created','2026-01-01')[:10])).days}
+  Days running:   {_safe_days_running(portfolio.get('created',''))}
 
 {'='*50}
 Generated: {now}

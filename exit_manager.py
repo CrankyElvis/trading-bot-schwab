@@ -26,6 +26,7 @@ MAX_HOLD_DAYS    = 5
 CRISIS_STOP_PCT    = 0.05  # 5%
 CRISIS_PROFIT_PCT  = 0.08  # 8% -- lock in fast during crisis
 CRISIS_HOLD_DAYS   = 3
+VOLATILITY_HOLD_DAYS = 5   # same as base but explicit
 
 
 def dynamic_take_profit(regime: str, adx: float = 0.0) -> float:
@@ -45,7 +46,7 @@ def dynamic_take_profit(regime: str, adx: float = 0.0) -> float:
     """
     if regime == 'crisis':
         return 0.08
-    if regime == 'volatility':
+    if regime in ('volatility', 'volatility-cautious', 'volatility-defensive'):
         return 0.12
     if regime == 'flow':
         if adx >= 35:
@@ -103,7 +104,11 @@ def check_position_exit(
 
     avg_price = position.get('avg_price', current_price)
     if avg_price <= 0:
-        return ExitSignal(symbol, False, 'hold', 0.0, 0.0, current_price, avg_price)
+        return ExitSignal(
+            symbol=symbol, should_exit=False, reason='hold',
+            current_pnl_pct=0.0, days_held=0.0,
+            current_price=current_price, avg_price=avg_price,
+        )
 
     pnl_pct = (current_price - avg_price) / avg_price
 
@@ -176,6 +181,7 @@ def check_all_positions(
     portfolio:  dict,
     quotes:     dict,
     regime:     str = 'neutral',
+    adx:        float = 0.0,
 ) -> list[ExitSignal]:
     """
     Checks every open position against exit rules.
@@ -200,6 +206,7 @@ def check_all_positions(
             current_price=price,
             regime=regime,
             trade_log=trade_log,
+            adx=adx,
         )
         signals.append(signal)
 
@@ -228,7 +235,8 @@ if __name__ == '__main__':
     from paper_trader import load_portfolio
 
     print("🔌 Authenticating...")
-    client, paper = authenticate()
+    client = authenticate()
+    paper = True  # assume paper mode
     print(f"✅ Connected ({'PAPER' if paper else 'LIVE'} mode)\n")
 
     portfolio = load_portfolio()

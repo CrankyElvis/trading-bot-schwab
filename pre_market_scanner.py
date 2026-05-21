@@ -21,6 +21,7 @@ Run via cron:   0 11 * * 1-5 /root/trading-bot/venv/bin/python /root/trading-bot
 import os
 import json
 import time
+import pandas as pd
 from datetime import datetime, timezone
 import pytz
 
@@ -30,6 +31,7 @@ from data_collector import (
     get_vix, get_vix_history, get_uw_flow,
     get_uw_dark_pool, get_fear_greed, fear_greed_modifier,
     compute_put_call_ratio, get_av_rsi, get_av_macd,
+    get_politician_tickers, get_wsb_tickers,
 )
 from regime_engine import evaluate_regime
 from flow_momentum import score_stock
@@ -55,7 +57,7 @@ SCAN_UNIVERSE = [
 
     # ── Financials ─────────────────────────────────────────────────────────
     'JPM', 'GS', 'MS', 'BAC', 'WFC', 'C', 'BLK', 'SCHW',
-    'V', 'MA', 'AXP', 'COF', 'SQ', 'PYPL',
+    'V', 'MA', 'AXP', 'COF', 'PYPL',
 
     # ── Energy ─────────────────────────────────────────────────────────────
     'XOM', 'CVX', 'COP', 'EOG', 'SLB', 'OXY', 'MPC', 'VLO',
@@ -66,7 +68,7 @@ SCAN_UNIVERSE = [
     'ISRG', 'REGN', 'VRTX', 'BIIB', 'MRNA', 'GILD',
 
     # ── Consumer / Retail ──────────────────────────────────────────────────
-    'HD', 'LOW', 'TGT', 'WMT', 'COST', 'AMZN', 'NKE', 'SBUX',
+    'HD', 'LOW', 'TGT', 'WMT', 'COST', 'NKE', 'SBUX',
     'MCD', 'YUM', 'BKNG', 'ABNB', 'UBER', 'LYFT',
 
     # ── Industrials / Defense ──────────────────────────────────────────────
@@ -75,7 +77,7 @@ SCAN_UNIVERSE = [
 
     # ── High Volatility / Meme ─────────────────────────────────────────────
     'MSTR', 'COIN', 'HOOD', 'PLTR', 'RBLX', 'RIVN', 'LCID',
-    'GME', 'AMC', 'BBBY', 'SOFI', 'OPEN',
+    'GME', 'AMC', 'SOFI', 'OPEN',
 
     # ── China ADRs ─────────────────────────────────────────────────────────
     'BABA', 'JD', 'PDD', 'BIDU', 'NIO', 'XPEV', 'LI',
@@ -160,7 +162,7 @@ def get_watchlist_candidates(min_score: float = 0.75, max_n: int = 20) -> list:
         return []
     candidates = [
         e for e in wl['entries']
-        if e['score'] >= min_score and e['direction'] == 'bullish'
+        if e['score'] >= min_score and e['direction'] != 'bearish'
     ]
     return candidates[:max_n]
 
@@ -203,7 +205,6 @@ def run_scan(client) -> dict:
 
     # ── Fetch UW market-wide flow ───────────────────────────────────────────
     print("\n🌊 Fetching UW market-wide flow...")
-    import pandas as pd
     flow_frames = []
     for sym in SCAN_UNIVERSE[:50]:   # top 50 by priority for flow
         df = get_uw_flow(sym, limit=30)
@@ -222,13 +223,45 @@ def run_scan(client) -> dict:
              0.90 if pc['signal'] == 'extreme_greed' else 1.0
     print(f"  P/C ratio: {pc['ratio']:.2f} ({pc['signal']}) → {pc_mod:.2f}x")
 
+    # ── Top-of-funnel injection ────────────────────────────────────────────
+    print("\n🏛️  Scanning politician + WSB top-of-funnel...")
+    scan_universe = list(SCAN_UNIVERSE)
+    injected = {}
+
+    try:
+        pol_tickers = get_politician_tickers(days=14, min_buy_count=1)
+        for t in pol_tickers:
+            sym = t['symbol']
+            if sym not in scan_universe:
+                scan_universe.append(sym)
+                injected[sym] = 'politician'
+                print(f"  [top-funnel] POLITICIAN injected: {sym} ({t['buy_count']} buy(s))")
+    except Exception as e:
+        print(f"  [top-funnel] Politician scan error: {e}")
+
+    try:
+        wsb_tickers = get_wsb_tickers(min_mentions=10, min_volume_surge=2.0)
+        for t in wsb_tickers:
+            sym = t['symbol']
+            if sym not in scan_universe and sym not in injected:
+                scan_universe.append(sym)
+                injected[sym] = 'wsb'
+                print(f"  [top-funnel] WSB injected: {sym} ({t['mentions']} mentions, {t['volume_surge']}x vol)")
+    except Exception as e:
+        print(f"  [top-funnel] WSB scan error: {e}")
+
+    if injected:
+        print(f"  Injected {len(injected)} symbols: {list(injected.keys())}")
+    else:
+        print("  No injections this cycle")
+
     # ── Score all symbols ──────────────────────────────────────────────────
-    print(f"\n🔍 Scoring {len(SCAN_UNIVERSE)} symbols...")
+    print(f"\n🔍 Scoring {len(scan_universe)} symbols ({len(SCAN_UNIVERSE)} base + {len(injected)} injected)...")
     entries     = []
     price_cache = {}
     scored      = 0
 
-    for symbol in SCAN_UNIVERSE:
+    for symbol in scan_universe:
         try:
             # Fetch price history (cache to avoid duplicate calls)
             if symbol not in price_cache:
@@ -251,7 +284,7 @@ def run_scan(client) -> dict:
             stock_score.total_score = round(
                 min(stock_score.total_score * fg_mod * pc_mod, 1.0), 4
             )
-            stock_score.qualifies = stock_score.total_score >= 0.75
+            stock_score.qualifies = stock_score.total_score >= 0.80  # sync with MIN_SCORE
 
             # Get RSI and MACD (rate limited — only for high scorers)
             rsi  = 50.0
@@ -263,6 +296,7 @@ def run_scan(client) -> dict:
 
             quote  = quotes.get(symbol, {})
             entry  = build_watchlist_entry(stock_score, quote, rsi, macd)
+            entry['source'] = injected.get(symbol, 'universe')
             entries.append(entry)
             scored += 1
 
@@ -283,8 +317,8 @@ def run_scan(client) -> dict:
     print(f"\n{'='*62}")
     print(f"  SCAN COMPLETE  ({elapsed} minutes)")
     print(f"{'='*62}")
-    print(f"  Symbols scanned: {len(entries)}")
-    print(f"  Qualified (≥0.75): {len(qualified)}")
+    print(f"  Symbols scanned: {len(entries)} ({len(SCAN_UNIVERSE)} base + {len(injected)} injected)")
+    print(f"  Qualified (≥0.80): {len(qualified)}")
     print(f"  Regime: {regime.regime.upper()}  VIXY: {vixy:.2f}")
     print(f"\n  Top 20 by score:")
     print(f"  {'Symbol':<8} {'Score':>6}  {'Dir':<10} {'RSI':>5}  {'MACD':>8}  Qualifies")
@@ -340,7 +374,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     print("🔌 Authenticating...")
-    client, paper = authenticate()
+    client = authenticate()
+    paper = True  # assume paper mode
     print(f"✅ Connected ({'PAPER' if paper else 'LIVE'} mode)\n")
 
     if args.loop:
@@ -358,7 +393,8 @@ if __name__ == '__main__':
             tomorrow   = now.replace(hour=SCAN_START_HOUR, minute=0,
                                      second=0, microsecond=0)
             if tomorrow <= now:
-                tomorrow = tomorrow.replace(day=tomorrow.day + 1)
+                from datetime import timedelta as _td
+                tomorrow = tomorrow + _td(days=1)
             sleep_sec  = (tomorrow - now).seconds
             print(f"💤 Sleeping until tomorrow 6:00am ET ({sleep_sec//3600:.1f}h)...")
             time.sleep(sleep_sec)

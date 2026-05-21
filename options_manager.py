@@ -21,7 +21,6 @@ Paper trading simulates options P&L using Black-Scholes approximation.
 import os
 import math
 import time
-import requests
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 from dotenv import load_dotenv
@@ -328,6 +327,7 @@ def check_options_exits(
         symbol  = pos.get('symbol', '')
         expiry  = pos.get('expiry', '')
         opt_type = pos.get('type', '')
+        dte      = None   # reset each iteration to avoid stale value from previous pos
 
         # Check expiry
         try:
@@ -347,7 +347,7 @@ def check_options_exits(
             # Re-estimate current premium
             entry_premium = pos.get('entry_premium', 0)
             strike        = pos.get('strike', last)
-            T             = max(dte / 365, 0.01) if 'dte' in locals() else 0.1
+            T             = max(dte / 365, 0.01) if dte is not None else 0.1
             curr_premium  = bs_call_price(last, strike, T, 0.05, iv)
 
             stop_pct   = entry_premium * (1 - LONG_CALL_STOP_PCT)
@@ -365,7 +365,7 @@ def check_options_exits(
             entry_premium = pos.get('entry_premium', 0)
             buyback_price = pos.get('buyback_price', entry_premium * 0.20)
             strike        = pos.get('strike', last)
-            T             = max(dte / 365, 0.01) if 'dte' in locals() else 0.1
+            T             = max(dte / 365, 0.01) if dte is not None else 0.1
             curr_premium  = bs_call_price(last, strike, T, 0.05, iv)
 
             if curr_premium <= buyback_price:
@@ -435,9 +435,10 @@ def evaluate_csp(
     strike = round(last_price * (1 - CSP_OTM_PCT), 2)
 
     # Cash required to secure put — tighter in volatility regime
-    vol_budget  = 0.15 if regime == 'volatility' else CSP_MAX_BUDGET
+    vol_regimes = ('volatility', 'volatility-cautious', 'volatility-defensive')
+    vol_budget  = 0.15 if regime in vol_regimes else CSP_MAX_BUDGET
     max_budget  = idle_cash * vol_budget
-    contracts   = max(1, min(3 if regime == 'volatility' else 5,
+    contracts   = max(1, min(3 if regime in vol_regimes else 5,
                              int(max_budget / (strike * 100))))
     cash_needed = strike * contracts * 100
 
@@ -449,7 +450,6 @@ def evaluate_csp(
         return None
 
     # Expiry: 35 DTE target (30-45 DTE sweet spot), nearest Friday
-    from datetime import datetime, timedelta
     expiry_dt = datetime.now() + timedelta(days=CSP_DTE_TARGET)
     days_to_friday = (4 - expiry_dt.weekday()) % 7
     expiry_dt += timedelta(days=days_to_friday)
@@ -463,7 +463,6 @@ def evaluate_csp(
         dte    = (expiry_dt - datetime.now()).days
 
     # Estimate put premium using Black-Scholes
-    import math
     iv      = estimate_iv(vixy)
     T       = dte / 365
     # For puts: use put-call parity approximation
@@ -530,7 +529,7 @@ def paper_sell_csp(
           f"@ ${signal.estimated_premium:.2f} = +${income:,.2f} premium")
     print(f"     Cash reserved: ${cash_needed:,.2f}  "
           f"Effective cost if assigned: ${position['effective_cost']:.2f}")
-    print(f"     Buy back at: ${position['buyback_price']:.2f} (80% profit)")
+    print(f"     Buy back at: ${position['buyback_price']:.2f} (50% profit target)")
 
     return position
 
@@ -596,7 +595,7 @@ def evaluate_defensive_rotation(
 
     Returns list of OptionsSignal-like dicts for defensive entries.
     """
-    if regime not in ('volatility',):
+    if regime not in ('volatility', 'volatility-cautious', 'volatility-defensive'):
         return []
     if vixy < 20 or idle_cash <= 0:
         return []
@@ -660,7 +659,6 @@ def evaluate_vix_mean_reversion(
     budget   = idle_cash * 0.05   # max 5% of idle cash
     contracts = max(1, min(3, int(budget / (spy_last * 0.03 * 100))))
 
-    from datetime import datetime, timedelta
     expiry_dt = datetime.now() + timedelta(days=30)
     days_to_friday = (4 - expiry_dt.weekday()) % 7
     expiry_dt += timedelta(days=days_to_friday)
@@ -808,7 +806,6 @@ def evaluate_iron_condor(
     max_loss    = round(wing_width * contracts * 100 - net_premium, 2)
     profit_target = round(net_premium * 0.50, 2)   # 50% profit target
 
-    from datetime import datetime, timedelta
     expiry_dt = datetime.now() + timedelta(days=35)
     days_to_friday = (4 - expiry_dt.weekday()) % 7
     expiry_dt += timedelta(days=days_to_friday)

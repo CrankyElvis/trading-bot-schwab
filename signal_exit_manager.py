@@ -31,10 +31,12 @@ Covered call exit mode:
 
 import os
 import time
+import math
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 
 import pandas as pd
+from exit_manager import dynamic_take_profit
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -214,7 +216,7 @@ def check_flow_dry_up(
     cutoff = datetime.now(timezone.utc) - timedelta(hours=FLOW_LOOKBACK_HOURS)
 
     sym_flow = uw_flow_df[
-        uw_flow_df.get('symbol', pd.Series()) == symbol
+        uw_flow_df['symbol'] == symbol
     ] if 'symbol' in uw_flow_df.columns else uw_flow_df
 
     if sym_flow.empty:
@@ -237,7 +239,7 @@ def check_flow_dry_up(
         }
 
     # Check if any recent flow meets minimum premium threshold
-    significant = recent[recent.get('premium', pd.Series(dtype=float)).fillna(0) >= MIN_FLOW_PREMIUM]
+    significant = recent[recent['premium'].fillna(0) >= MIN_FLOW_PREMIUM] if 'premium' in recent.columns else pd.DataFrame()
     dry_up      = significant.empty
 
     return dry_up, {
@@ -335,7 +337,6 @@ def check_covered_call_exit(
     contracts = qty // 100
 
     # Expiry: 2 weeks out, next Friday
-    from datetime import datetime, timedelta
     expiry_dt = datetime.now() + timedelta(days=COVERED_CALL_DTE)
     days_to_friday = (4 - expiry_dt.weekday()) % 7
     expiry_dt += timedelta(days=days_to_friday)
@@ -343,7 +344,6 @@ def check_covered_call_exit(
 
     # Estimate premium using simple approximation
     # At 3% OTM with 14 DTE, premium ≈ 0.5-1.5% of stock price typically
-    import math
     iv         = 0.25   # assume 25% IV as default
     T          = COVERED_CALL_DTE / 365
     d1         = (math.log(current_price / strike) + (0.05 + 0.5 * iv**2) * T) / (iv * math.sqrt(T))
@@ -369,6 +369,7 @@ def check_hard_stops(
     current_price: float,
     avg_price:     float,
     regime:        str,
+    adx:           float = 0.0,
 ) -> tuple[bool, str, dict]:
     """
     Hard stop loss and take profit — always active regardless of signals.
@@ -382,7 +383,7 @@ def check_hard_stops(
     flow    = (regime == 'flow')
 
     stop_pct   = CRISIS_STOP_PCT   if crisis else STOP_LOSS_PCT
-    profit_pct = dynamic_take_profit(regime, adx=kwargs.get('adx', 0.0))
+    profit_pct = dynamic_take_profit(regime, adx=adx)
 
     if pnl_pct <= -stop_pct:
         return True, 'stop_loss', {
@@ -474,7 +475,6 @@ def check_signal_exits(
 
             # Check if approaching expiry (5 days)
             try:
-                from datetime import datetime
                 exp_date  = datetime.strptime(expiry, '%Y-%m-%d')
                 days_left = (exp_date - datetime.now()).days
             except Exception:
@@ -542,7 +542,7 @@ def check_signal_exits(
         triggers = {}
 
         # ── 1. Hard stop loss (always check first — capital protection) ─────────
-        hard_fired, hard_reason, hard_detail = check_hard_stops(price, avg_price, regime)
+        hard_fired, hard_reason, hard_detail = check_hard_stops(price, avg_price, regime, adx=adx)
         triggers['hard_stop'] = hard_detail
         if hard_fired and hard_reason == 'stop_loss':
             results.append(SignalExitResult(
@@ -767,7 +767,8 @@ if __name__ == '__main__':
     import pandas as pd
 
     print("🔌 Authenticating...")
-    client, paper = authenticate()
+    client = authenticate()
+    paper = True  # assume paper mode
     print(f"✅ Connected ({'PAPER' if paper else 'LIVE'} mode)\n")
 
     portfolio  = load_portfolio()

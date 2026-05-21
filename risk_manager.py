@@ -1,15 +1,18 @@
 """
 risk_manager.py
-Runs 6 pre-trade checks before any position is opened.
-All 6 must pass (return False for is_blocked) for a trade to proceed.
+Runs 9 pre-trade checks before any position is opened.
+All 9 must pass (return False for is_blocked) for a trade to proceed.
 
 Blockers:
-  1. Drawdown gate      — portfolio down > 10% from starting cash
-  2. Max positions      — already at 5 open positions (2 in crisis)
-  3. Earnings blocker   — earnings within 48 hours
-  4. FDA blocker        — biotech/pharma catalyst risk
-  5. Macro blocker      — major macro event within 24 hours
-  6. Market tide        — SPY in a bearish trend (5d EMA < 20d EMA)
+  1. Drawdown gate        — portfolio down > 10% from starting cash
+  2. Max positions        — already at 5 open positions (2 in crisis)
+  3. Earnings blocker     — earnings within 48 hours
+  4. FDA blocker          — biotech/pharma catalyst risk
+  5. Macro blocker        — major macro event within 24 hours
+  6. Market tide          — SPY in a bearish trend (5d EMA < 20d EMA)
+  7. Momentum             — price below 10d EMA
+  8. Volatility regime    — defensive regime blocks entries
+  9. Circuit breaker      — rolling 30-day loss > 10%
 
 Crisis regime override:
   In crisis regime, max positions drops to 2 and all checks still apply.
@@ -104,7 +107,9 @@ def check_drawdown(portfolio: dict) -> tuple[bool, dict]:
 def check_max_positions(portfolio: dict, crisis: bool = False) -> tuple[bool, dict]:
     limit = CRISIS_MAX_POS if crisis else MAX_POSITIONS
     positions = portfolio.get('positions', {})
-    count = len([p for p in positions.values() if p.get('quantity', 0) > 0])
+    PARKING = {'GLD', 'GDX', 'SCHP', 'VTIP', 'TIP'}
+    count = len([s for s, p in positions.items()
+                 if p.get('quantity', 0) > 0 and s not in PARKING])
     return count >= limit, {
         'open':  count,
         'limit': limit,
@@ -237,6 +242,15 @@ def check_momentum(symbol: str, price_history: dict) -> tuple[bool, dict]:
 # ── Blocker 8: Volatility Regime Entry Block ─────────────────────────────────
 
 def check_volatility_regime(regime: str, term_structure: dict = None) -> tuple:
+    # volatility-defensive: no new entries allowed
+    if regime == 'volatility-defensive':
+        return True, {
+            'reason': 'Volatility-defensive regime — no new entries, exits only',
+            'regime': regime,
+        }
+    # volatility-cautious: entries allowed with reduced size (handled by position sizing)
+    # crisis: handled separately via max_positions and crisis flag
+    # legacy 'volatility' name: treat as defensive (belt-and-suspenders)
     if regime == 'volatility':
         return True, {
             'reason': 'Volatility regime — no new entries, exits only',
@@ -363,7 +377,8 @@ if __name__ == '__main__':
     from regime_engine import evaluate_regime
 
     print("🔌 Authenticating...")
-    client, paper = authenticate()
+    client = authenticate()
+    paper = True  # assume paper mode
     print(f"✅ Connected ({'PAPER' if paper else 'LIVE'} mode)\n")
 
     # Load portfolio

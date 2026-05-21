@@ -655,11 +655,19 @@ def get_sec_insider_buys(symbol: str, days: int = 14) -> list:
         buys = []
         for hit in hits[:10]:
             src = hit.get('_source', {})
-            # Only include buys (transaction code P = purchase)
-            if 'P' in str(src.get('period_of_report', '')):
+            # Only include buys — transaction code 'P' = Purchase
+            # Check transaction_code field, NOT period_of_report (which is a date string)
+            tx_code = str(src.get('transaction_code', '')).upper()
+            # If transaction_code not available, check form text for purchase indicators
+            snippet = str(src).lower()
+            is_buy = (tx_code == 'P' or
+                      (not tx_code and any(w in snippet
+                       for w in ['purchase', 'acquired', 'acquisition'])))
+            if not is_buy:
                 continue
-            display = src.get('display_date_filed', '')
-            entity  = src.get('entity_name', '')
+            display = src.get('display_date_filed', src.get('file_date', ''))
+            entity  = src.get('entity_name', src.get('display_names', [''])[0]
+                              if src.get('display_names') else '')
             buys.append({
                 'symbol':    symbol,
                 'filed':     display,
@@ -689,79 +697,6 @@ def score_sec_insider(symbol: str, days: int = 14) -> float:
 
 
 # ── Reddit WSB Sentiment ──────────────────────────────────────────────────────
-
-def get_reddit_sentiment(symbol: str) -> dict:
-    """
-    Fetches Reddit WSB sentiment for a symbol using free JSON API.
-    No API key required — uses Reddit's public JSON endpoint.
-    Returns dict with mention_count, sentiment (bullish/bearish/neutral), score.
-
-    Contrarian signal:
-      High mentions + bearish = potential buy (crowd is wrong)
-      High mentions + bullish = caution (crowd may be right but fading)
-    """
-    try:
-        headers = {'User-Agent': 'trading-bot/1.0'}
-        # Search WSB for symbol mentions in hot posts
-        url = f'https://www.reddit.com/r/wallstreetbets/search.json'
-        params = {
-            'q':      symbol,
-            'sort':   'new',
-            'limit':  25,
-            't':      'day',
-        }
-        r = requests.get(url, headers=headers, params=params, timeout=8)
-        if r.status_code != 200:
-            return {'mention_count': 0, 'sentiment': 'neutral', 'score': 0.5}
-
-        posts   = r.json().get('data', {}).get('children', [])
-        mentions = 0
-        bullish  = 0
-        bearish  = 0
-
-        bull_words = ['calls', 'moon', 'buy', 'long', 'bullish', 'squeeze', 'yolo', '🚀', '🟢']
-        bear_words = ['puts', 'short', 'bearish', 'dump', 'crash', 'puts', '🔴', '💀']
-
-        for post in posts:
-            data  = post.get('data', {})
-            title = (data.get('title', '') + ' ' + data.get('selftext', '')).lower()
-            if symbol.lower() in title or f'${symbol.lower()}' in title:
-                mentions += 1
-                bulls = sum(1 for w in bull_words if w in title)
-                bears = sum(1 for w in bear_words if w in title)
-                if bulls > bears:  bullish += 1
-                elif bears > bulls: bearish += 1
-
-        if mentions == 0:
-            return {'mention_count': 0, 'sentiment': 'neutral', 'score': 0.5}
-
-        bull_ratio = bullish / mentions if mentions else 0.5
-
-        # Contrarian scoring: extreme bearish = buy signal
-        if bull_ratio < 0.25 and mentions >= 3:
-            sentiment = 'contrarian_buy'
-            score     = 0.80
-        elif bull_ratio > 0.75 and mentions >= 5:
-            sentiment = 'crowded_long'
-            score     = 0.30   # fade the crowd
-        elif mentions >= 3:
-            sentiment = 'bullish' if bull_ratio > 0.5 else 'bearish'
-            score     = 0.55 if bull_ratio > 0.5 else 0.45
-        else:
-            sentiment = 'neutral'
-            score     = 0.50
-
-        return {
-            'mention_count': mentions,
-            'bullish':       bullish,
-            'bearish':       bearish,
-            'bull_ratio':    round(bull_ratio, 2),
-            'sentiment':     sentiment,
-            'score':         round(score, 2),
-        }
-    except Exception as e:
-        print(f"  [!] Reddit sentiment error for {symbol}: {e}")
-        return {'mention_count': 0, 'sentiment': 'neutral', 'score': 0.5}
 
 
 
@@ -1044,10 +979,9 @@ def _fetch_congress_bulk() -> list:
     Returns combined list of trade dicts.
     """
     global _congress_cache, _congress_cache_ts
-    import time as _time
 
     # Re-use cache for 4 hours
-    if _congress_cache and (_time.time() - _congress_cache_ts) < 14400:
+    if _congress_cache and (time.time() - _congress_cache_ts) < 14400:
         return _congress_cache.get('trades', [])
 
     all_trades = []
@@ -1091,7 +1025,7 @@ def _fetch_congress_bulk() -> list:
         pass
 
     _congress_cache    = {'trades': all_trades}
-    _congress_cache_ts = _time.time()
+    _congress_cache_ts = time.time()
     return all_trades
 
 
@@ -1221,7 +1155,7 @@ def get_politician_tickers(days: int = 14, min_buy_count: int = 1,
         buys_by_symbol = {}
         for t in all_trades:
             sym  = t.get('ticker', '').upper().strip()
-            date = t.get('disclosure_date') or t.get('date_received') or ''
+            date = t.get('disclosure_date') or t.get('date_recieved') or ''
             txn  = t.get('type', '').lower()
             if not sym or not date or 'buy' not in txn:
                 continue

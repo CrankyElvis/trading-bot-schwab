@@ -4,20 +4,20 @@ Scores every stock in the universe across 9 signals and returns the
 top candidates for the current trading cycle.
 
 Qualification rules:
-  - Score must be >= MIN_SCORE (0.75) to qualify
+  - Score must be >= MIN_SCORE (0.80) to qualify
   - Maximum MAX_CANDIDATES (4) stocks per cycle
   - Hard blockers from risk_manager must pass before scoring counts
 
 Signal weights (must sum to 1.0):
-  1. UW sweep / repeated hits     0.30
-  2. Dark pool prints              0.15
-  3. Politician flow               0.15
-  4. Corporate insider flow        0.10
-  5. Price / RVOL confirmation     0.10
-  6. GEX / greek exposure          0.05
-  7. Market tide (SPY EMA)         0.05
-  8. Sector tide                   0.05
-  9. ETF inflow / outflow          0.05
+  1. Market tide (SPY EMA)         0.27
+  2. Sector tide                   0.22
+  3. Dark pool prints              0.11
+  4. Politician flow               0.11
+  5. UW sweep / repeated hits      0.10
+  6. Corporate insider flow        0.10
+  7. Price / RVOL confirmation     0.05
+  8. GEX / greek exposure          0.03
+  9. ETF inflow / outflow          0.01
 
 Politician boosters (applied to signal 3):
   Committee chair trade   1.5x
@@ -650,10 +650,12 @@ def score_stock(
     signals_firing = sum(1 for v in signals.values() if v >= 0.30)
     confirmation_ok = signals_firing >= MIN_SIGNALS_FIRING
 
-    # Direction gate: in flow/neutral, require bullish direction
+    # Direction gate: require bullish direction (not bearish)
+    # 'neutral' direction means UW data unavailable — don't block entries
+    # Only block explicitly bearish signals
     direction_ok = True
-    if REQUIRE_DIRECTION and direction == 'neutral':
-        direction_ok = False   # neutral direction = no edge, skip
+    if REQUIRE_DIRECTION and direction == 'bearish':
+        direction_ok = False   # explicitly bearish = skip
 
     qualifies = (total >= MIN_SCORE) and confirmation_ok and direction_ok
 
@@ -793,7 +795,8 @@ if __name__ == '__main__':
     from regime_engine import evaluate_regime
 
     print("🔌 Authenticating...")
-    client, paper = authenticate()
+    client = authenticate()
+    paper = True  # assume paper mode
     print(f"✅ Connected ({'PAPER' if paper else 'LIVE'} mode)\n")
 
     # Get regime

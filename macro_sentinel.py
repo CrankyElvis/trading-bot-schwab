@@ -77,7 +77,7 @@ def _fetch_yf_closes(ticker: str, days: int = 60) -> list:
 
         # yfinance >= 0.2 returns MultiIndex columns even for single tickers
         # Flatten: ('Close', 'SPY') -> use xs or just grab first level
-        if isinstance(df.columns, type(df.columns)) and hasattr(df.columns, 'levels'):
+        if isinstance(df.columns, pd.MultiIndex):
             # MultiIndex — extract Close for this ticker
             try:
                 close_col = df['Close']
@@ -240,7 +240,6 @@ def score_put_call_ratio(signals: list) -> MacroSignal:
     Uses CBOE total equity P/C ratio (free CSV).
     """
     try:
-        import urllib.request, io, csv
         url = 'https://cdn.cboe.com/api/global/us_indices/daily_prices/SPY_History.csv'
         # CBOE doesn't publish P/C via simple CSV -- use SPY options proxy via price action
         # Fallback: use SKEW index or just return neutral
@@ -318,7 +317,9 @@ def evaluate_macro(use_cache: bool = True) -> MacroState:
             with open(CACHE_FILE, encoding='utf-8') as f:
                 cached = json.load(f)
             cached_at = datetime.fromisoformat(cached.get('updated_at', '2000-01-01'))
-            age_hours = (datetime.now() - cached_at).total_seconds() / 3600
+            if cached_at.tzinfo is None:
+                cached_at = cached_at.replace(tzinfo=timezone.utc)
+            age_hours = (datetime.now(timezone.utc) - cached_at).total_seconds() / 3600
             if age_hours < CACHE_TTL_H:
                 c = cached
                 return MacroState(
@@ -385,7 +386,7 @@ def evaluate_macro(use_cache: bool = True) -> MacroState:
     yellow_count = sum(1 for s in all_signals if s.score == 0.5)
 
     if composite >= 0.70 or red_count >= 3:
-        recommended_regime = 'volatility'
+        recommended_regime = 'volatility-cautious'
         summary = (f'MACRO RED ({red_count} red, {yellow_count} yellow signals) -- '
                    f'recommend volatility regime, cut sizes 50%, move overnight to GLD')
     elif composite >= 0.40 or red_count >= 2:
@@ -405,7 +406,7 @@ def evaluate_macro(use_cache: bool = True) -> MacroState:
                  for s in all_signals],
         recommended_regime=recommended_regime,
         summary=summary,
-        updated_at=datetime.now().isoformat(),
+        updated_at=datetime.now(timezone.utc).isoformat(),
         data_quality=data_quality,
     )
 
@@ -457,7 +458,7 @@ def apply_macro_override(regime: str, macro: MacroState) -> tuple:
     - crisis is always preserved
     - Only upgrades if macro score >= 0.55 to avoid false positives
     """
-    REGIME_ORDER = {'flow': 0, 'neutral': 1, 'volatility': 2, 'crisis': 3}
+    REGIME_ORDER = {'flow': 0, 'neutral': 1, 'volatility-cautious': 2, 'volatility-defensive': 2, 'crisis': 3}
 
     if regime == 'crisis':
         return regime, False, 'Crisis regime preserved'

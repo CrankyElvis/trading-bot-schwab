@@ -436,7 +436,7 @@ def run_cycle(client):
         log_cycle({'event': 'after_hours', 'regime': regime_state.regime,
                    'timestamp': cycle_start.isoformat()})
         try:
-            send_daily_summary(portfolio, regime_state=regime_state.regime)
+            send_daily_summary(portfolio, regime_state=regime_state)
             print("  📧 Daily summary email sent")
         except Exception as e:
             print(f"  ⚠️  Daily summary email failed: {e}")
