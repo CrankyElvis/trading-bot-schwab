@@ -1057,7 +1057,7 @@ def get_congress_trades(symbol: str, days: int = 90) -> dict:
 
         for tx in all_trades:
             # Normalize ticker field — both APIs use 'ticker'
-            ticker = str(tx.get('ticker', tx.get('asset_ticker', '')) or '').upper().strip()
+            ticker = str(tx.get('ticker', tx.get('asset_ticker', ''))).upper().strip()
             if ticker != sym_upper or ticker == '--':
                 continue
 
@@ -1142,7 +1142,7 @@ def get_politician_tickers(days: int = 14, min_buy_count: int = 1,
         # Group buys by symbol
         buys_by_symbol = {}
         for t in all_trades:
-            sym  = (t.get('ticker') or '').upper().strip()
+            sym  = t.get('ticker', '').upper().strip()
             date = t.get('disclosure_date') or t.get('date_recieved') or ''
             txn  = t.get('type', '').lower()
             if not sym or not date or ('buy' not in txn and 'purchase' not in txn):
