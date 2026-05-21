@@ -823,11 +823,12 @@ class BacktestPortfolio:
                             exits.append((symbol, price, 'score_decay'))
                             continue
 
-            # 6. Time stop — regime-aware max hold
-            hold_days_pos = (pd.Timestamp(date) - pd.Timestamp(pos.entry_date)).days
-            if hold_days_pos >= max_hold:
-                exits.append((symbol, price, 'score_decay'))
-                continue
+            # 6. Time stop — regime-aware max hold (skip CSPs — they use options expiry)
+            if not pos.signals.get('csp_entry', False):
+                hold_days_pos = (pd.Timestamp(date) - pd.Timestamp(pos.entry_date)).days
+                if hold_days_pos >= max_hold:
+                    exits.append((symbol, price, 'score_decay'))
+                    continue
 
         for symbol, price, reason in exits:
             exec_price = apply_slippage(price, symbol, False)
