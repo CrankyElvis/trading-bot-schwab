@@ -229,7 +229,7 @@ def run_scan(client) -> dict:
     injected = {}
 
     try:
-        pol_tickers = get_politician_tickers(days=14, min_buy_count=1)
+        pol_tickers = get_politician_tickers(days=90, min_buy_count=1)
         for t in pol_tickers:
             sym = t['symbol']
             if sym not in scan_universe:
@@ -240,7 +240,7 @@ def run_scan(client) -> dict:
         print(f"  [top-funnel] Politician scan error: {e}")
 
     try:
-        wsb_tickers = get_wsb_tickers(min_mentions=10, min_volume_surge=2.0)
+        wsb_tickers = get_wsb_tickers(min_mentions=5, min_volume_surge=1.5)
         for t in wsb_tickers:
             sym = t['symbol']
             if sym not in scan_universe and sym not in injected:
