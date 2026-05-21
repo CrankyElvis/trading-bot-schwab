@@ -17,46 +17,56 @@ import os
 from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass, field
 
-# ── Thresholds ────────────────────────────────────────────────────────────────
+# ── Regime-aware exit parameters (sweep_exits.py 5yr backtest) ──────────────
+#
+#   flow:                 7%/20%/7d   Sharpe 0.600  WinR 56.6%
+#   neutral:              5%/20%/7d   Sharpe 0.252  WinR 51.1%
+#   volatility-cautious:  3%/8%/3d    Sharpe 0.988  WinR 64.9%
+#   volatility-defensive: 4%/12%/3d   survival-mode defaults (insufficient data)
+#   crisis:               5%/8%/3d    capital preservation defaults
+#
+# Key finding: TP barely matters (exits driven by score_decay/time_stop).
+# Hold time is the dominant variable: 7d flow/neutral, 3d vol regimes.
 
-STOP_LOSS_PCT    = 0.05   # 5% base stop loss
-TAKE_PROFIT_PCT  = 0.15   # 15% base take profit
-MAX_HOLD_DAYS    = 5
+REGIME_PARAMS = {
+    'flow':                 {'stop': 0.07, 'tp': 0.20, 'hold': 7},
+    'neutral':              {'stop': 0.05, 'tp': 0.20, 'hold': 7},
+    'volatility-cautious':  {'stop': 0.03, 'tp': 0.08, 'hold': 3},
+    'volatility-defensive': {'stop': 0.04, 'tp': 0.12, 'hold': 3},
+    'crisis':               {'stop': 0.05, 'tp': 0.08, 'hold': 3},
+}
 
-CRISIS_STOP_PCT    = 0.05  # 5%
-CRISIS_PROFIT_PCT  = 0.08  # 8% -- lock in fast during crisis
-CRISIS_HOLD_DAYS   = 3
-VOLATILITY_HOLD_DAYS = 5   # same as base but explicit
+# Legacy flat constants kept for fallback / smoke tests
+STOP_LOSS_PCT        = 0.05
+TAKE_PROFIT_PCT      = 0.20
+MAX_HOLD_DAYS        = 7
+CRISIS_STOP_PCT      = 0.05
+CRISIS_PROFIT_PCT    = 0.08
+CRISIS_HOLD_DAYS     = 3
+VOLATILITY_HOLD_DAYS = 3
+
+
+def get_regime_params(regime: str) -> dict:
+    """Returns stop/tp/hold dict for the given regime. Falls back to neutral."""
+    return REGIME_PARAMS.get(regime, REGIME_PARAMS['neutral'])
 
 
 def dynamic_take_profit(regime: str, adx: float = 0.0) -> float:
     """
-    Dynamic take profit target based on regime and trend strength (ADX).
-
-    Logic:
-      Crisis:                    8%  -- lock in gains fast, market unstable
-      Volatility:               12%  -- slightly looser, more room to run
-      Neutral:                  15%  -- standard default
-      Flow (ADX < 25):          18%  -- flow regime, moderate trend
-      Flow (25 <= ADX < 35):    22%  -- flow regime, strong trend -- let winners run
-      Flow (ADX >= 35):         27%  -- flow regime, powerful trend -- maximum extension
-
-    This prevents premature exits in strong uptrends while protecting gains
-    in choppy or stressed markets.
+    Returns take profit target for regime.
+    Flow regime: ADX scales TP from 20% to 27% to let strong trends run.
+    All other regimes: sweep-optimised flat value.
     """
-    if regime == 'crisis':
+    if regime in ('crisis', 'volatility-cautious'):
         return 0.08
-    if regime in ('volatility', 'volatility-cautious', 'volatility-defensive'):
+    if regime == 'volatility-defensive':
         return 0.12
     if regime == 'flow':
-        if adx >= 35:
-            return 0.27
-        elif adx >= 25:
-            return 0.22
-        else:
-            return 0.18
-    # neutral
-    return 0.15
+        if adx >= 35:   return 0.27
+        elif adx >= 25: return 0.22
+        else:           return 0.20
+    # neutral (and unknown)
+    return 0.20
 
 
 # ── Result Container ──────────────────────────────────────────────────────────
@@ -95,12 +105,10 @@ def check_position_exit(
     Returns:
         ExitSignal with should_exit=True if any rule fires
     """
-    crisis      = (regime == 'crisis')
-    volatility  = (regime == 'volatility')
-
-    stop_pct   = CRISIS_STOP_PCT      if crisis     else STOP_LOSS_PCT
+    params     = get_regime_params(regime)
+    stop_pct   = params['stop']
     profit_pct = dynamic_take_profit(regime, adx=adx)
-    max_days   = CRISIS_HOLD_DAYS     if crisis     else                  VOLATILITY_HOLD_DAYS if volatility else MAX_HOLD_DAYS
+    max_days   = params['hold']
 
     avg_price = position.get('avg_price', current_price)
     if avg_price <= 0:

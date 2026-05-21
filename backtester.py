@@ -156,11 +156,21 @@ try:
     from exit_manager import (
         STOP_LOSS_PCT, TAKE_PROFIT_PCT, dynamic_take_profit,
         MAX_HOLD_DAYS, CRISIS_STOP_PCT, CRISIS_PROFIT_PCT, CRISIS_HOLD_DAYS,
+        REGIME_PARAMS, get_regime_params,
     )
-    print(f"  Using live exit rules: stop={STOP_LOSS_PCT:.0%} profit={TAKE_PROFIT_PCT:.0%} hold={MAX_HOLD_DAYS}d")
+    print(f"  Using live exit rules: regime-aware REGIME_PARAMS from exit_manager.py")
 except ImportError:
-    STOP_LOSS_PCT, TAKE_PROFIT_PCT, MAX_HOLD_DAYS = 0.05, 0.15, 7
-    CRISIS_STOP_PCT, CRISIS_PROFIT_PCT, CRISIS_HOLD_DAYS = 0.05, 0.08, 2
+    # Fallback regime params matching sweep-optimised values in exit_manager.py
+    REGIME_PARAMS = {
+        'flow':                 {'stop': 0.07, 'tp': 0.20, 'hold': 7},
+        'neutral':              {'stop': 0.05, 'tp': 0.20, 'hold': 7},
+        'volatility-cautious':  {'stop': 0.03, 'tp': 0.08, 'hold': 3},
+        'volatility-defensive': {'stop': 0.04, 'tp': 0.12, 'hold': 3},
+        'crisis':               {'stop': 0.05, 'tp': 0.08, 'hold': 3},
+    }
+    def get_regime_params(r): return REGIME_PARAMS.get(r, REGIME_PARAMS['neutral'])
+    STOP_LOSS_PCT, TAKE_PROFIT_PCT, MAX_HOLD_DAYS = 0.05, 0.20, 7
+    CRISIS_STOP_PCT, CRISIS_PROFIT_PCT, CRISIS_HOLD_DAYS = 0.05, 0.08, 3
 
 MIN_SCORE = 0.50   # Lowered for backtest — proxy signals weaker than live UW flow
 
@@ -742,12 +752,12 @@ class BacktestPortfolio:
         Additional exits: score decay, market tide turn.
         Volatility regime: no new entries, but exits still run.
         """
-        crisis     = (regime == 'crisis')
-        flow       = (regime == 'flow')
-        stop_pct   = CRISIS_STOP_PCT   if crisis else STOP_LOSS_PCT
+        rparams     = get_regime_params(regime)
         current_adx = compute_adx(spy_hist[spy_hist.index <= pd.Timestamp(date)].tail(60))
-        profit_pct = dynamic_take_profit(regime, adx=current_adx)
-        exits      = []
+        stop_pct    = rparams['stop']
+        profit_pct  = dynamic_take_profit(regime, adx=current_adx)
+        max_hold    = rparams['hold']
+        exits       = []
 
         # Market tide check
         market_bearish = False
@@ -766,8 +776,8 @@ class BacktestPortfolio:
             pnl_pct = (price - pos.entry_price) / pos.entry_price
 
             # 1. Stop loss — tighter in cautious volatility
-            eff_stop = 0.04 if regime == 'volatility-cautious' else stop_pct
-            if pnl_pct <= -eff_stop:
+            # 1. Stop loss — regime-aware
+            if pnl_pct <= -stop_pct:
                 exits.append((symbol, price, 'stop_loss'))
                 continue
 
@@ -812,6 +822,12 @@ class BacktestPortfolio:
                         if curr_score < 0.35 or (entry_score > 0 and curr_score < entry_score * 0.45):
                             exits.append((symbol, price, 'score_decay'))
                             continue
+
+            # 6. Time stop — regime-aware max hold
+            hold_days_pos = (pd.Timestamp(date) - pd.Timestamp(pos.entry_date)).days
+            if hold_days_pos >= max_hold:
+                exits.append((symbol, price, 'score_decay'))
+                continue
 
         for symbol, price, reason in exits:
             exec_price = apply_slippage(price, symbol, False)
