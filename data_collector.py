@@ -973,10 +973,10 @@ _congress_cache_ts: float = 0.0
 
 def _fetch_congress_bulk() -> list:
     """
-    Fetches and caches combined House + Senate congressional trade data.
-    House: S3 bulk JSON  (last available snapshot)
-    Senate: senatestockwatcher.com live JSON API
-    Returns combined list of trade dicts.
+    Fetches congressional trade data via Unusual Whales API.
+    Endpoint: /api/congress/recent-trades
+    Falls back to empty list if unavailable.
+    Cache: 4 hours
     """
     global _congress_cache, _congress_cache_ts
 
@@ -986,42 +986,30 @@ def _fetch_congress_bulk() -> list:
 
     all_trades = []
 
-    # Senate — live API, clean JSON, no auth
     try:
-        senate_url = 'https://senatestockwatcher.com/api'
-        r = requests.get(senate_url, timeout=12,
-                         headers={'User-Agent': 'trading-bot/2.0'})
-        if r.status_code == 200:
-            data = r.json()
-            # Senate API returns list of senator objects with transactions array
-            if isinstance(data, list):
-                for senator in data:
-                    txns = senator.get('transactions', [])
-                    name = f"{senator.get('first_name','')} {senator.get('last_name','')}".strip()
-                    for tx in txns:
-                        tx['representative'] = name
-                        tx['chamber']        = 'senate'
-                        all_trades.append(tx)
-            elif isinstance(data, dict) and 'transactions' in data:
-                # Some endpoints return flat list
-                for tx in data['transactions']:
-                    tx['chamber'] = 'senate'
-                    all_trades.append(tx)
-    except Exception as e:
-        pass   # Senate unavailable — fall through to house data
+        token = os.environ.get('UW_API_KEY', '')
+        if not token:
+            return []
 
-    # House — S3 bulk JSON (historical, updated periodically)
-    try:
-        house_url = ('https://house-stock-watcher-data.s3-us-west-2'
-                     '.amazonaws.com/data/all_transactions.json')
-        r = requests.get(house_url, timeout=15,
-                         headers={'User-Agent': 'trading-bot/2.0'})
+        # UW returns up to 500 recent trades — paginate to get 90 days worth
+        url = 'https://api.unusualwhales.com/api/congress/recent-trades'
+        headers = {'Authorization': f'Bearer {token}'}
+        r = requests.get(url, headers=headers, timeout=15)
+
         if r.status_code == 200:
-            house_trades = r.json()
-            for tx in house_trades:
-                tx['chamber'] = 'house'
-            all_trades.extend(house_trades)
-    except Exception as e:
+            data = r.json().get('data', [])
+            for tx in data:
+                # Normalize fields to match existing get_congress_trades() logic
+                all_trades.append({
+                    'ticker':           tx.get('ticker', ''),
+                    'representative':   tx.get('name', ''),
+                    'type':             'Purchase' if tx.get('txn_type','').lower() == 'buy' else tx.get('txn_type',''),
+                    'disclosure_date':  tx.get('filed_at_date', ''),
+                    'transaction_date': tx.get('transaction_date', ''),
+                    'chamber':          tx.get('member_type', 'unknown'),
+                    'amount':           tx.get('amounts', ''),
+                })
+    except Exception:
         pass
 
     _congress_cache    = {'trades': all_trades}
@@ -1069,7 +1057,7 @@ def get_congress_trades(symbol: str, days: int = 90) -> dict:
 
         for tx in all_trades:
             # Normalize ticker field — both APIs use 'ticker'
-            ticker = str(tx.get('ticker', tx.get('asset_ticker', ''))).upper().strip()
+            ticker = str(tx.get('ticker', tx.get('asset_ticker', '')) or '').upper().strip()
             if ticker != sym_upper or ticker == '--':
                 continue
 
@@ -1154,10 +1142,10 @@ def get_politician_tickers(days: int = 14, min_buy_count: int = 1,
         # Group buys by symbol
         buys_by_symbol = {}
         for t in all_trades:
-            sym  = t.get('ticker', '').upper().strip()
+            sym  = (t.get('ticker') or '').upper().strip()
             date = t.get('disclosure_date') or t.get('date_recieved') or ''
             txn  = t.get('type', '').lower()
-            if not sym or not date or 'buy' not in txn:
+            if not sym or not date or ('buy' not in txn and 'purchase' not in txn):
                 continue
             if date < cutoff:
                 continue
