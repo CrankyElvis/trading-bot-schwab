@@ -1116,6 +1116,140 @@ def get_congress_trades(symbol: str, days: int = 90) -> dict:
 
 # ── Top-of-funnel scanners ────────────────────────────────────────────────────
 
+
+
+def get_earnings_surprise_tickers(days_back: int = 5,
+                                   min_surprise_pct: float = 5.0) -> list:
+    """
+    Returns tickers with significant EPS beat or miss in the last days_back days.
+    Uses UW /api/earnings/{ticker} — already paid for.
+
+    PEAD effect: market underreacts to earnings surprises initially.
+    Significant beat/miss = inject into scanner universe for scoring.
+
+    Args:
+        days_back:         How many days back to look for earnings reports
+        min_surprise_pct:  Minimum absolute % surprise to qualify (default 5%)
+
+    Returns:
+        List of dicts: [{'symbol', 'source', 'surprise_pct', 'direction'}]
+    """
+    try:
+        token   = os.environ.get('UW_API_KEY', '')
+        if not token:
+            return []
+
+        from datetime import datetime, timedelta
+        cutoff  = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
+        headers = {'Authorization': f'Bearer {token}'}
+
+        # Fetch market-wide recent earnings from UW
+        # Use afterhours + premarket endpoints to get recent reporters
+        candidates = []
+        for endpoint in ['afterhours', 'premarket']:
+            try:
+                url = f'{UW_BASE_URL}/earnings/{endpoint}'
+                r   = requests.get(url, headers=headers, timeout=12)
+                if r.status_code != 200:
+                    continue
+                data = r.json().get('data', [])
+                for item in data:
+                    date = item.get('date', '') or item.get('earnings_date', '')
+                    if not date or date < cutoff:
+                        continue
+                    sym = (item.get('symbol') or item.get('ticker') or '').upper()
+                    if not sym:
+                        continue
+                    candidates.append(sym)
+            except Exception:
+                continue
+
+        # For each candidate, fetch EPS surprise
+        results = []
+        seen    = set()
+        for sym in candidates:
+            if sym in seen or not sym:
+                continue
+            seen.add(sym)
+            try:
+                url = f'{UW_BASE_URL}/earnings/{sym}'
+                r   = requests.get(url, headers=headers, timeout=8)
+                if r.status_code != 200:
+                    continue
+                data = r.json().get('data', [])
+                if not data:
+                    continue
+                # Most recent report
+                latest = data[0] if isinstance(data, list) else data
+                eps_est    = latest.get('street_mean_est') or latest.get('eps_estimate') or latest.get('estimate')
+                eps_actual = latest.get('actual_eps') or latest.get('eps_actual') or latest.get('actual')
+                report_date = latest.get('report_date') or latest.get('date', '')
+
+                if not report_date or report_date < cutoff:
+                    continue
+                if eps_est is None or eps_actual is None:
+                    continue
+                if float(eps_est) == 0:
+                    continue
+
+                surprise_pct = (float(eps_actual) - float(eps_est)) / abs(float(eps_est)) * 100
+                if abs(surprise_pct) >= min_surprise_pct:
+                    direction = 'bullish' if surprise_pct > 0 else 'bearish'
+                    results.append({
+                        'symbol':       sym,
+                        'source':       'earnings_surprise',
+                        'surprise_pct': round(surprise_pct, 2),
+                        'direction':    direction,
+                        'report_date':  report_date,
+                    })
+            except Exception:
+                continue
+
+        if results:
+            print(f"  [earnings_scanner] Found {len(results)} surprise tickers "
+                  f"(≥{min_surprise_pct}% surprise, last {days_back}d)")
+        return results
+
+    except Exception as e:
+        print(f"  [earnings_scanner] Error: {e}")
+        return []
+
+
+def get_stock_ivr(symbol: str) -> float:
+    """
+    Fetches IV Rank (IVR) for a symbol from Unusual Whales.
+    IVR = where current IV sits relative to its 52-week range (0-100).
+    High IVR (>50) = elevated premium — good for selling puts (CSP).
+    Low IVR (<30)  = cheap premium — poor time to sell puts.
+
+    Returns float 0-100, or 50.0 as neutral default on failure.
+    """
+    try:
+        token = os.environ.get('UW_API_KEY', '')
+        if not token:
+            return 50.0
+
+        url     = f'{UW_BASE_URL}/stock/{symbol}/iv-rank'
+        headers = {'Authorization': f'Bearer {token}'}
+        r       = requests.get(url, headers=headers, timeout=8)
+
+        if r.status_code != 200:
+            return 50.0
+
+        data = r.json().get('data', [])
+        if isinstance(data, list) and data:
+            # Most recent entry is first
+            latest = data[0]
+            ivr = latest.get('iv_rank_1y') or latest.get('iv_rank') or latest.get('ivr')
+            if ivr is not None:
+                return round(float(ivr), 2)
+
+        return 50.0
+
+    except Exception:
+        return 50.0
+
+
 def get_politician_tickers(days: int = 14, min_buy_count: int = 1,
                             min_market_cap_b: float = 2.0,
                             min_avg_volume: int = 500_000) -> list:
