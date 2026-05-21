@@ -357,6 +357,33 @@ def run_cycle(client):
     # execute_parking(client, parking_plan, portfolio)
     portfolio = load_portfolio()
 
+    # ── Top-of-funnel universe injection ─────────────────────────────────────
+    injected_symbols = {}   # {symbol: source}
+    try:
+        pol_tickers = get_politician_tickers(days=14, min_buy_count=1)
+        for t in pol_tickers:
+            sym = t['symbol']
+            if sym not in DEFAULT_UNIVERSE:
+                injected_symbols[sym] = 'politician'
+                print(f"  [top-funnel] POLITICIAN injected: {sym} "
+                      f"({t['buy_count']} buy(s))")
+    except Exception as e:
+        print(f"  [top-funnel] Politician scan error: {e}")
+
+    try:
+        wsb_tickers = get_wsb_tickers(min_mentions=10, min_volume_surge=2.0)
+        for t in wsb_tickers:
+            sym = t['symbol']
+            if sym not in DEFAULT_UNIVERSE and sym not in injected_symbols:
+                injected_symbols[sym] = 'wsb'
+                print(f"  [top-funnel] WSB injected: {sym} "
+                      f"({t['mentions']} mentions, {t['volume_surge']}x vol)")
+    except Exception as e:
+        print(f"  [top-funnel] WSB scan error: {e}")
+
+    cycle_universe = list(DEFAULT_UNIVERSE) + [s for s in injected_symbols
+                                                if s not in DEFAULT_UNIVERSE]
+
     # ── Pre-market scan (6:00am) ─────────────────────────────────────────────
     # ── Close overnight position at open ─────────────────────────────────────
     if cycle_action in ('pre_open', 'open') and not weekend:
@@ -408,6 +435,11 @@ def run_cycle(client):
         print_portfolio_summary(client)
         log_cycle({'event': 'after_hours', 'regime': regime_state.regime,
                    'timestamp': cycle_start.isoformat()})
+        try:
+            send_daily_summary(portfolio, regime_state=regime_state.regime)
+            print("  📧 Daily summary email sent")
+        except Exception as e:
+            print(f"  ⚠️  Daily summary email failed: {e}")
         return
 
     # ── Close cycle overnight index strategy ─────────────────────────────────
