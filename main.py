@@ -28,6 +28,7 @@ from data_collector import (
     collect_snapshot, get_vix, get_vix_history,
     get_vix_term_structure, get_price_history,
     get_quotes, DEFAULT_UNIVERSE, get_dp_thresholds_bulk,
+    get_politician_tickers, get_wsb_tickers,
 )
 from regime_engine import evaluate_regime
 from macro_sentinel import evaluate_macro, print_macro_report
@@ -50,6 +51,16 @@ from paper_trader import (
 
 MAX_CANDIDATES    = 4
 BASE_POSITION_PCT = 0.20
+
+# ── Top-of-funnel source sizing overrides ─────────────────────────────────────
+POLITICIAN_POSITION_PCT = 0.10   # 10% — liquidity risk on non-standard symbols
+WSB_POSITION_PCT        = 0.08   # 8%  — volatility risk on meme names
+POLITICIAN_STOP_PCT     = 0.07   # wider stop — hold longer, momentum fades slowly
+WSB_STOP_PCT            = 0.03   # tight stop — fast reversal risk
+POLITICIAN_TP_PCT       = 0.25   # flat 25% take profit
+WSB_TP_PCT              = 0.20   # flat 20% take profit — take fast
+POLITICIAN_MAX_HOLD     = 10     # days
+WSB_MAX_HOLD            = 2      # days
 LOG_FILE          = 'bot_log.jsonl'
 ET                = pytz.timezone('America/New_York')
 
@@ -408,10 +419,10 @@ def run_cycle(client):
     # ── Weekend: watchlist prep only ──────────────────────────────────────────
     if weekend:
         print("\n📋 Weekend mode — building watchlist for Monday...")
-        snapshot = collect_snapshot(client, DEFAULT_UNIVERSE)
+        snapshot = collect_snapshot(client, cycle_universe)
         port_val = portfolio.get('cash', 25000)
         result   = run_scoring_cycle(
-            universe=DEFAULT_UNIVERSE,
+            universe=cycle_universe,
             snapshot=snapshot,
             regime=regime_state.regime,
             portfolio_value=port_val,
@@ -431,10 +442,10 @@ def run_cycle(client):
     # ── Pre-open or after hours: pre-score only ──────────────────────────────
     if not market_open:
         print("\n🌙 After hours — pre-scoring tomorrow's universe...")
-        snapshot = collect_snapshot(client, DEFAULT_UNIVERSE)
+        snapshot = collect_snapshot(client, cycle_universe)
         port_val = portfolio.get('cash', 25000)
         result   = run_scoring_cycle(
-            universe=DEFAULT_UNIVERSE,
+            universe=cycle_universe,
             snapshot=snapshot,
             regime=regime_state.regime,
             portfolio_value=port_val,
@@ -452,7 +463,7 @@ def run_cycle(client):
 
     # ── Market open: full trading cycle ──────────────────────────────────────
     print("\n📊 Market open — running full trading cycle...")
-    snapshot = collect_snapshot(client, DEFAULT_UNIVERSE)
+    snapshot = collect_snapshot(client, cycle_universe)
 
     # Pre-fetch float-adjusted dark pool thresholds for all symbols
     print("  Fetching float-adjusted dark pool thresholds...")

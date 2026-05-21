@@ -1191,6 +1191,157 @@ def get_congress_trades(symbol: str, days: int = 90) -> dict:
 
 # ── Smoke Test ────────────────────────────────────────────────────────────────
 
+
+# ── Top-of-funnel scanners ────────────────────────────────────────────────────
+
+def get_politician_tickers(days: int = 14, min_buy_count: int = 1,
+                            min_market_cap_b: float = 2.0,
+                            min_avg_volume: int = 500_000) -> list:
+    """
+    Top-of-funnel politician scanner.
+    Returns tickers from recent congressional buys that pass liquidity gates,
+    even if they are NOT in the standard 260-symbol universe.
+
+    Liquidity gates (to filter illiquid names):
+        min_market_cap_b:  minimum market cap in billions (default $2B)
+        min_avg_volume:    minimum 30-day avg daily volume (default 500k shares)
+
+    Returns list of dicts:
+        [{'symbol': str, 'source': 'politician', 'buy_count': int,
+          'politicians': list, 'cluster_14d': int}]
+    """
+    try:
+        all_trades = _fetch_congress_bulk()
+        if not all_trades:
+            return []
+
+        cutoff = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+
+        # Group buys by symbol
+        buys_by_symbol = {}
+        for t in all_trades:
+            sym  = t.get('ticker', '').upper().strip()
+            date = t.get('disclosure_date') or t.get('date_received') or ''
+            txn  = t.get('type', '').lower()
+            if not sym or not date or 'buy' not in txn:
+                continue
+            if date < cutoff:
+                continue
+            if sym not in buys_by_symbol:
+                buys_by_symbol[sym] = {'buy_count': 0, 'politicians': [], 'cluster_14d': 0}
+            buys_by_symbol[sym]['buy_count'] += 1
+            name = t.get('representative') or t.get('name', '')
+            if name and name not in buys_by_symbol[sym]['politicians']:
+                buys_by_symbol[sym]['politicians'].append(name)
+
+        # Filter by buy count
+        candidates = [
+            {'symbol': sym, 'source': 'politician',
+             'buy_count': v['buy_count'], 'politicians': v['politicians']}
+            for sym, v in buys_by_symbol.items()
+            if v['buy_count'] >= min_buy_count
+        ]
+
+        # Apply liquidity gate via yfinance quick check
+        try:
+            import yfinance as yf
+            liquid = []
+            for c in candidates:
+                try:
+                    info = yf.Ticker(c['symbol']).fast_info
+                    mktcap = getattr(info, 'market_cap', 0) or 0
+                    volume = getattr(info, 'three_month_average_volume', 0) or 0
+                    if mktcap >= min_market_cap_b * 1e9 and volume >= min_avg_volume:
+                        liquid.append(c)
+                except Exception:
+                    pass  # skip if can't verify
+            candidates = liquid
+        except ImportError:
+            pass  # yfinance not available, return unfiltered
+
+        return sorted(candidates, key=lambda x: x['buy_count'], reverse=True)
+
+    except Exception as e:
+        print(f'  [politician_scanner] Error: {e}')
+        return []
+
+
+def get_wsb_tickers(min_mentions: int = 10,
+                     min_volume_surge: float = 2.0) -> list:
+    """
+    Top-of-funnel WSB scanner.
+    Returns tickers trending on r/wallstreetbets with volume confirmation.
+    Used for universe injection only — NOT for scoring weight.
+
+    Gates:
+        min_mentions:      minimum Reddit mentions in last 24h (default 10)
+        min_volume_surge:  minimum today's volume / 30d avg volume (default 2x)
+
+    Returns list of dicts:
+        [{'symbol': str, 'source': 'wsb', 'mentions': int, 'volume_surge': float}]
+    """
+    try:
+        import requests as _req
+        # Pull hot posts from WSB
+        headers = {'User-Agent': 'TradingBot/1.0 (research)'}
+        resp = _req.get(
+            'https://www.reddit.com/r/wallstreetbets/hot.json?limit=100',
+            headers=headers, timeout=10
+        )
+        if resp.status_code != 200:
+            return []
+
+        posts = resp.json().get('data', {}).get('children', [])
+
+        # Extract tickers (simple heuristic: 2-5 uppercase letters in title)
+        import re
+        ticker_mentions = {}
+        pattern = re.compile(r'([A-Z]{2,5})')
+        SKIP = {'WSB', 'DD', 'YOLO', 'ATH', 'CEO', 'SEC', 'FDA', 'IPO',
+                'ETF', 'FED', 'GDP', 'CPI', 'EPS', 'USA', 'USD', 'EUR',
+                'THE', 'FOR', 'ARE', 'NOT', 'BUT', 'YOU', 'CAN', 'HAS'}
+
+        for post in posts:
+            title = post.get('data', {}).get('title', '')
+            tickers = pattern.findall(title)
+            for t in tickers:
+                if t not in SKIP and len(t) >= 2:
+                    ticker_mentions[t] = ticker_mentions.get(t, 0) + 1
+
+        # Filter by mentions
+        candidates = [
+            {'symbol': sym, 'source': 'wsb', 'mentions': count, 'volume_surge': 0.0}
+            for sym, count in ticker_mentions.items()
+            if count >= min_mentions
+        ]
+
+        # Volume surge confirmation via yfinance
+        try:
+            import yfinance as yf
+            confirmed = []
+            for c in candidates:
+                try:
+                    hist = yf.Ticker(c['symbol']).history(period='31d')
+                    if len(hist) < 2:
+                        continue
+                    avg_vol = hist['Volume'].iloc[:-1].mean()
+                    today_vol = hist['Volume'].iloc[-1]
+                    surge = today_vol / avg_vol if avg_vol > 0 else 0
+                    if surge >= min_volume_surge:
+                        c['volume_surge'] = round(surge, 1)
+                        confirmed.append(c)
+                except Exception:
+                    pass
+            candidates = confirmed
+        except ImportError:
+            pass
+
+        return sorted(candidates, key=lambda x: x['mentions'], reverse=True)
+
+    except Exception as e:
+        print(f'  [wsb_scanner] Error: {e}')
+        return []
+
 if __name__ == '__main__':
     print("🔌 Authenticating...")
     client, paper = authenticate()

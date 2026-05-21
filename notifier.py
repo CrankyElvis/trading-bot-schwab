@@ -217,6 +217,39 @@ def check_csp_assignment(portfolio: dict) -> bool:
     return False
 
 
+def check_cycle_errors(log_entries: list, lookback_minutes: int = 30) -> bool:
+    """Alert if any error events in bot_log.jsonl in last N minutes."""
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=lookback_minutes)
+    recent_errors = []
+    for entry in log_entries:
+        if entry.get('event') != 'error':
+            continue
+        ts_str = entry.get('timestamp', '')
+        if not ts_str:
+            continue
+        try:
+            ts = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if ts > cutoff:
+                recent_errors.append(entry.get('error', 'unknown error'))
+        except Exception:
+            pass
+
+    if recent_errors:
+        unique_errors = list(dict.fromkeys(recent_errors))  # dedupe, preserve order
+        body = (
+            f'CYCLE ERROR ALERT\n\n'
+            f'{len(recent_errors)} error(s) in the last {lookback_minutes} minutes:\n\n'
+            + '\n'.join(f'  - {e}' for e in unique_errors) +
+            f'\n\nTime: {datetime.now().strftime("%Y-%m-%d %H:%M ET")}\n\n'
+            f'Check logs: ssh root@142.93.4.251 "tail -20 /root/trading-bot/bot_log.jsonl"'
+        )
+        send_email(f'Cycle Errors Detected: {len(recent_errors)} in {lookback_minutes}min', body, 'WARNING')
+        return True
+    return False
+
+
 def run_anomaly_checks(portfolio: dict, regime: str = 'neutral',
                        previous_regime: str = '', vix: float = 0.0,
                        log_entries: list = None) -> dict:
@@ -226,6 +259,16 @@ def run_anomaly_checks(portfolio: dict, regime: str = 'neutral',
     """
     if log_entries is None:
         log_entries = []
+    # Auto-load from bot_log.jsonl if no entries passed
+    if not log_entries:
+        try:
+            import json as _json
+            log_path = Path(__file__).parent / 'bot_log.jsonl'
+            if log_path.exists():
+                with open(log_path) as f:
+                    log_entries = [_json.loads(line) for line in f if line.strip()]
+        except Exception:
+            pass
 
     triggered = {}
     triggered['drawdown']       = check_drawdown(portfolio)
@@ -234,6 +277,7 @@ def run_anomaly_checks(portfolio: dict, regime: str = 'neutral',
     triggered['vix_spike']      = check_vix_spike(vix) if vix > 0 else False
     triggered['bot_restart']    = check_bot_restart(log_entries)
     triggered['csp_assignment'] = check_csp_assignment(portfolio)
+    triggered['cycle_errors']   = check_cycle_errors(log_entries)
 
     return triggered
 
@@ -270,10 +314,21 @@ def send_daily_summary(portfolio: dict, regime_state=None,
     # Regime info
     regime    = regime_state.regime    if regime_state else 'unknown'
     vixy      = regime_state.vixy      if regime_state else 0
-    positions_str = ', '.join(
-        f"{sym} x{p['quantity']} @ ${p['avg_price']:.2f}"
-        for sym, p in positions.items()
-    ) if positions else 'None'
+    # Split positions by source
+    standard_pos = {s: p for s, p in positions.items()
+                    if p.get('source', 'standard') == 'standard'}
+    politician_pos = {s: p for s, p in positions.items()
+                      if p.get('source', 'standard') == 'politician'}
+    wsb_pos = {s: p for s, p in positions.items()
+               if p.get('source', 'standard') == 'wsb'}
+
+    def fmt_pos(pos_dict):
+        return ', '.join(
+            f"{sym} x{p.get('quantity', 0)} @ ${p.get('avg_price', 0):.2f}"
+            for sym, p in pos_dict.items()
+        ) if pos_dict else 'None'
+
+    positions_str = fmt_pos(standard_pos)
 
     # Overnight position
     overnight_syms = [sym for sym in positions if sym in ('SPY','QQQ','GLD')]
@@ -300,8 +355,14 @@ TODAY'S ACTIVITY
   Sells:          {len(todays_sells)}
   Realized P&L:   ${todays_pnl:>+,.2f}
 
-OPEN POSITIONS
+OPEN POSITIONS (Standard)
   {positions_str}
+
+CONGRESSIONAL TRADES (Politician-sourced)
+  {fmt_pos(politician_pos)}
+
+WSB INJECTED POSITIONS
+  {fmt_pos(wsb_pos)}
 
 OVERNIGHT POSITION
   {overnight_str}
