@@ -251,7 +251,7 @@ def check_volatility_regime(regime: str, term_structure: dict = None) -> tuple:
     # volatility-cautious: entries allowed with reduced size (handled by position sizing)
     # crisis: handled separately via max_positions and crisis flag
     # legacy 'volatility' name: treat as defensive (belt-and-suspenders)
-    if regime == 'volatility':
+    if regime in ('volatility-cautious', 'volatility-defensive'):
         return True, {
             'reason': 'Volatility regime — no new entries, exits only',
             'regime': regime,
@@ -377,7 +377,7 @@ if __name__ == '__main__':
     from regime_engine import evaluate_regime
 
     print("🔌 Authenticating...")
-    client = authenticate()
+    client, paper = authenticate()
     paper = True  # assume paper mode
     print(f"✅ Connected ({'PAPER' if paper else 'LIVE'} mode)\n")
 

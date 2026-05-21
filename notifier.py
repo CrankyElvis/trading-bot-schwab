@@ -424,6 +424,69 @@ Generated: {now}
     return send_email(f'Daily Summary -- {today} -- P&L ${total_pnl:+,.0f}', body, 'INFO')
 
 
+
+def send_scanner_summary(watchlist: dict) -> bool:
+    """
+    Send pre-market scanner results email after 6am scan.
+    Shows regime, top 20 by score, qualified tickers, and data source health.
+    """
+    from datetime import datetime
+    now     = datetime.now().strftime('%Y-%m-%d %H:%M ET')
+    date    = datetime.now().strftime('%Y-%m-%d')
+    regime  = watchlist.get('regime', 'unknown').upper()
+    vixy    = watchlist.get('vixy', 0.0)
+    qual    = watchlist.get('qualified', 0)
+    scanned = watchlist.get('symbols_scanned', 0)
+    entries = watchlist.get('entries', [])
+
+    # Qualified tickers
+    qualified = [e for e in entries if e.get('qualifies')]
+    top20     = entries[:20]
+
+    # Header
+    lines = [
+        f"PRE-MARKET SCAN RESULTS — {date}",
+        f"{'='*48}",
+        f"Regime:   {regime}",
+        f"VIXY:     {vixy:.2f}",
+        f"Scanned:  {scanned} symbols",
+        f"Qualified: {qual} (threshold ≥0.80)",
+        "",
+    ]
+
+    # Qualified section
+    if qualified:
+        lines.append(f"✅ QUALIFIED TICKERS ({len(qualified)})")
+        lines.append("-" * 40)
+        for e in qualified:
+            src = e.get('source', 'universe')
+            tag = f" [{src}]" if src != 'universe' else ''
+            lines.append(f"  {e['symbol']:<8} score={e['score']:.3f}  dir={e['direction']}{tag}")
+        lines.append("")
+    else:
+        lines.append("⏸  NO SYMBOLS QUALIFIED — cash stays parked")
+        lines.append("")
+
+    # Top 20
+    lines.append("TOP 20 BY SCORE")
+    lines.append("-" * 48)
+    lines.append(f"  {'Symbol':<8} {'Score':>6}  {'Dir':<10}  {'Source'}")
+    for e in top20:
+        src = e.get('source', 'universe')
+        tag = f"[{src}]" if src != 'universe' else ''
+        lines.append(f"  {e['symbol']:<8} {e['score']:>6.3f}  {e['direction']:<10}  {tag}")
+
+    lines += [
+        "",
+        f"Generated: {now}",
+        f"{'='*48}",
+    ]
+
+    body    = "\n".join(lines)
+    subject = f"Scanner: {qual} qualified | {regime} | VIXY {vixy:.1f}"
+    return send_email(subject, body, 'INFO')
+
+
 # ── Standalone test ───────────────────────────────────────────────────────────
 
 if __name__ == '__main__':

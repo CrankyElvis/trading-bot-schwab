@@ -250,7 +250,7 @@ if __name__ == '__main__':
     from data_collector import get_vix, get_vix_history
 
     print("🔌 Authenticating...")
-    client = authenticate()
+    client, paper = authenticate()
     paper = True  # assume paper mode
     print(f"✅ Connected ({'PAPER' if paper else 'LIVE'} mode)\n")
 

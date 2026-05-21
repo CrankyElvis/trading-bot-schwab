@@ -29,6 +29,7 @@ from data_collector import (
     get_vix_term_structure, get_price_history,
     get_quotes, DEFAULT_UNIVERSE, get_dp_thresholds_bulk,
     get_politician_tickers, get_wsb_tickers,
+    get_earnings_surprise_tickers,
 )
 from regime_engine import evaluate_regime
 from macro_sentinel import evaluate_macro, print_macro_report
@@ -41,7 +42,12 @@ from signal_exit_manager import (
     check_signal_exits, print_signal_exit_summary,
     enrich_position_metadata,
 )
-from options_manager import evaluate_options, print_options_summary, paper_buy_call, paper_sell_covered_call
+from options_manager import (
+    evaluate_options, print_options_summary, paper_buy_call,
+    paper_sell_covered_call, paper_sell_csp, OptionsSignal,
+    evaluate_defensive_rotation, evaluate_vix_mean_reversion,
+    evaluate_iron_condor,
+)
 from paper_trader import (
     load_portfolio, paper_buy, paper_sell,
     print_portfolio_summary, estimate_fees,
@@ -61,6 +67,10 @@ POLITICIAN_TP_PCT       = 0.25   # flat 25% take profit
 WSB_TP_PCT              = 0.20   # flat 20% take profit — take fast
 POLITICIAN_MAX_HOLD     = 10     # days
 WSB_MAX_HOLD            = 2      # days
+EARNINGS_POSITION_PCT   = 0.12   # 12% — large-cap quality names
+EARNINGS_STOP_PCT       = 0.05   # standard stop
+EARNINGS_TP_PCT         = 0.15   # 15% — PEAD moves fast
+EARNINGS_MAX_HOLD       = 5      # days — PEAD fades quickly
 LOG_FILE          = 'bot_log.jsonl'
 ET                = pytz.timezone('America/New_York')
 
@@ -214,12 +224,21 @@ def execute_trades(client, candidates, regime_state, portfolio) -> list:
         symbol    = candidate.symbol
         score     = candidate.total_score
         direction = candidate.direction
+        source    = candidate.signals.get('source', 'universe') if hasattr(candidate, 'signals') and candidate.signals else 'universe'
 
         if direction == 'bearish' and regime_state.regime != 'crisis':
             print(f"  ⏭  Skipping {symbol} — bearish signal in non-crisis regime")
             continue
 
-        position_dollars = calc_position_size(idle_cash, regime_state.position_size, score)
+        # Source-aware position sizing — injected symbols get custom risk params
+        if source == 'politician':
+            position_dollars = round(idle_cash * POLITICIAN_POSITION_PCT, 2)
+        elif source == 'wsb':
+            position_dollars = round(idle_cash * WSB_POSITION_PCT, 2)
+        elif source == 'earnings_surprise':
+            position_dollars = round(idle_cash * EARNINGS_POSITION_PCT, 2)
+        else:
+            position_dollars = calc_position_size(idle_cash, regime_state.position_size, score)
 
         from data_collector import get_quote
         q     = get_quote(client, symbol)
@@ -255,6 +274,7 @@ def execute_trades(client, candidates, regime_state, portfolio) -> list:
                     price_history={symbol: get_price_history(client, symbol, days=30)},
                     symbol=symbol,
                 )
+                pf['positions'][symbol]['source'] = source
                 save_portfolio(pf)
 
         results.append({
@@ -381,15 +401,23 @@ def run_cycle(client):
     except Exception as e:
         print(f"  [top-funnel] WSB scan error: {e}")
 
+    try:
+        earn_tickers = get_earnings_surprise_tickers(days_back=5, min_surprise_pct=5.0)
+        for t in earn_tickers:
+            sym = t['symbol']
+            if sym not in DEFAULT_UNIVERSE and sym not in injected_symbols:
+                injected_symbols[sym] = 'earnings_surprise'
+                sign = '+' if t['surprise_pct'] > 0 else ''
+                print(f"  [top-funnel] EARNINGS injected: {sym} "
+                      f"({sign}{t['surprise_pct']:.1f}% surprise, {t['direction']})")
+    except Exception as e:
+        print(f"  [top-funnel] Earnings scan error: {e}")
+
     cycle_universe = list(DEFAULT_UNIVERSE) + [s for s in injected_symbols
                                                 if s not in DEFAULT_UNIVERSE]
 
     # ── Pre-market scan (6:00am) ─────────────────────────────────────────────
     # ── Close overnight position at open ─────────────────────────────────────
-    if cycle_action in ('pre_open', 'open') and not weekend:
-        portfolio = load_portfolio()
-        _close_overnight_position(client, portfolio)
-
     if cycle_action == 'premarket_scan' and not weekend:
         print("\n🌅 Pre-market scan — scoring full 141-symbol universe...")
 
@@ -441,12 +469,6 @@ def run_cycle(client):
         except Exception as e:
             print(f"  ⚠️  Daily summary email failed: {e}")
         return
-
-    # ── Close cycle overnight index strategy ─────────────────────────────────
-    # Runs at 4:05pm ET after exits are processed
-    # Buy index ETF at close, sell at next open to capture overnight drift
-    if cycle_action == 'exit_only' and not weekend:
-        _run_overnight_strategy(client, portfolio, regime_state)
 
     # ── Weekend: watchlist prep only ──────────────────────────────────────────
     if weekend:
@@ -670,7 +692,6 @@ def run_cycle(client):
             print(f"  ✅ Covered call sold: {signal.symbol}")
 
     # Execute cash-secured puts (high-conviction entries at a discount)
-    from options_manager import paper_sell_csp
     for signal in options_eval.get('csps', []):
         portfolio = load_portfolio()
         if signal.symbol in portfolio.get('positions', {}):
@@ -681,7 +702,7 @@ def run_cycle(client):
                   f"effective buy ${pos['effective_cost']:.2f} if assigned")
 
     # ── Volatility Playbook ────────────────────────────────────────────────────
-    if regime_state.regime == 'volatility':
+    if regime_state.regime in ('volatility-cautious', 'volatility-defensive'):
         portfolio  = load_portfolio()
         idle_cash  = portfolio.get('cash', 0)
         all_quotes = get_quotes(client, ['SPY','QQQ','XLP','XLU','XLV','GLD','GDX'])

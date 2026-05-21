@@ -341,7 +341,7 @@ def print_portfolio_summary(client):
 
 
 if __name__ == '__main__':
-    client = authenticate()
+    client, paper = authenticate()
     paper = True  # assume paper mode
 
     if not os.path.exists(PAPER_PORTFOLIO_FILE):

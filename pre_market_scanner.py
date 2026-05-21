@@ -26,12 +26,13 @@ from datetime import datetime, timezone
 import pytz
 
 from auth import authenticate
+from notifier import send_scanner_summary
 from data_collector import (
     get_price_history, get_quote, get_quotes,
     get_vix, get_vix_history, get_uw_flow,
     get_uw_dark_pool, get_fear_greed, fear_greed_modifier,
     compute_put_call_ratio, get_av_rsi, get_av_macd,
-    get_politician_tickers, get_wsb_tickers,
+    get_politician_tickers, get_wsb_tickers, get_earnings_surprise_tickers,
 )
 from regime_engine import evaluate_regime
 from flow_momentum import score_stock
@@ -250,6 +251,21 @@ def run_scan(client) -> dict:
     except Exception as e:
         print(f"  [top-funnel] WSB scan error: {e}")
 
+    try:
+        earn_tickers = get_earnings_surprise_tickers(days_back=5, min_surprise_pct=5.0)
+        for t in earn_tickers:
+            sym = t['symbol']
+            if sym not in scan_universe:
+                scan_universe.append(sym)
+            if sym not in injected:
+                injected[sym] = 'earnings_surprise'
+                direction = t.get('direction', '')
+                surprise  = t.get('surprise_pct', 0)
+                sign      = '+' if surprise > 0 else ''
+                print(f"  [top-funnel] EARNINGS injected: {sym} ({sign}{surprise:.1f}% surprise, {direction})")
+    except Exception as e:
+        print(f"  [top-funnel] Earnings scan error: {e}")
+
     if injected:
         print(f"  Injected {len(injected)} symbols: {list(injected.keys())}")
     else:
@@ -343,6 +359,12 @@ def run_scan(client) -> dict:
     print(f"\n  Watchlist saved → {WATCHLIST_FILE}")
     print(f"{'='*62}\n")
 
+    # Send scanner summary email
+    try:
+        send_scanner_summary(watchlist)
+    except Exception as e:
+        print(f"  [notifier] Scanner email failed: {e}")
+
     return watchlist
 
 
@@ -374,7 +396,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     print("🔌 Authenticating...")
-    client = authenticate()
+    client, paper = authenticate()
     paper = True  # assume paper mode
     print(f"✅ Connected ({'PAPER' if paper else 'LIVE'} mode)\n")
 

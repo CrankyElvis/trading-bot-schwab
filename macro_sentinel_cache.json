@@ -1,0 +1,52 @@
+{
+  "score": 0.4,
+  "warning": "yellow",
+  "signals": [
+    {
+      "name": "Yield curve / rates",
+      "value": -3.9352516213623354,
+      "score": 0.5,
+      "description": "TLT -20d: -3.9%, -5d: -2.1% -- rates rising moderately",
+      "source": "Yahoo/TLT"
+    },
+    {
+      "name": "Credit spread (HYG/LQD)",
+      "value": 0.8852922119763336,
+      "score": 0.0,
+      "description": "HYG-LQD 10d: 0.89%, 5d: 0.68% -- credit healthy",
+      "source": "Yahoo/HYG+LQD"
+    },
+    {
+      "name": "Energy / inflation (USO)",
+      "value": 18.207120501280723,
+      "score": 1.0,
+      "description": "USO +18.2% (20d), +7.7% (5d) -- energy surging, inflation risk HIGH",
+      "source": "Yahoo/USO"
+    },
+    {
+      "name": "Dollar strength (UUP)",
+      "value": 1.1280981748727774,
+      "score": 0.5,
+      "description": "UUP +1.1% (20d) -- dollar strengthening, monitor",
+      "source": "Yahoo/UUP"
+    },
+    {
+      "name": "Put/call pressure (VIX proxy)",
+      "value": 18.059999465942383,
+      "score": 0.0,
+      "description": "VIX 18.1, +1.1% 5d -- put/call neutral",
+      "source": "Yahoo/VIX"
+    },
+    {
+      "name": "Market breadth (SPY/IWM)",
+      "value": 4.798079305246661,
+      "score": 0.5,
+      "description": "SPY above 50d, breadth spread 4.8% -- breadth narrowing",
+      "source": "Yahoo/SPY+IWM"
+    }
+  ],
+  "recommended_regime": "neutral",
+  "summary": "MACRO YELLOW (1 red, 3 yellow signals) -- recommend neutral regime floor, tighten stops, avoid new CSPs",
+  "updated_at": "2026-05-19T21:14:27.610179",
+  "data_quality": "full"
+}

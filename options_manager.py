@@ -27,6 +27,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from data_collector import get_stock_ivr
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 LONG_CALL_MIN_SCORE    = 0.85   # only buy calls on very high conviction
@@ -425,6 +427,19 @@ def evaluate_csp(
     # Crisis: no new positions at all
     if regime == 'crisis':
         return None
+
+    # IVR check — only sell puts when volatility premium is elevated
+    # High IVR (>50) = collect more premium for same risk → boost score
+    # Low IVR (<30)  = thin premium → suppress or skip CSP
+    ivr = get_stock_ivr(symbol)
+    if ivr < 20.0:
+        return None   # IV too compressed — not worth selling puts
+    # IVR multiplier: scales score up/down based on premium quality
+    # IVR 50 = neutral (1.0x), IVR 80 = 1.15x, IVR 20 = 0.85x
+    ivr_multiplier = 0.85 + (ivr / 100) * 0.30
+    adjusted_score = round(score * ivr_multiplier, 4)
+    if adjusted_score < CSP_MIN_SCORE:
+        return None   # IVR-adjusted score below threshold
     # Volatility: allow CSPs only — premium is highest when VIX is elevated
     # Tighter sizing: 15% budget vs 25% in normal regimes
     if last_price <= 0 or idle_cash <= 0:
@@ -589,7 +604,7 @@ def evaluate_defensive_rotation(
     These are traded positions (not parking) — actively managed with exits.
 
     Only fires when:
-      - regime == 'volatility'
+      - regime in ('volatility-cautious', 'volatility-defensive')
       - vixy > 20 (confirmed elevated vol environment)
       - idle_cash available
 

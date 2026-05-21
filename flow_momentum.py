@@ -795,7 +795,7 @@ if __name__ == '__main__':
     from regime_engine import evaluate_regime
 
     print("🔌 Authenticating...")
-    client = authenticate()
+    client, paper = authenticate()
     paper = True  # assume paper mode
     print(f"✅ Connected ({'PAPER' if paper else 'LIVE'} mode)\n")
 

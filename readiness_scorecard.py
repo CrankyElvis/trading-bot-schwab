@@ -123,7 +123,7 @@ def compute_paper_metrics(portfolio: dict, log_entries: list) -> dict:
                 ts = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
                 if ts.tzinfo is None:
                     ts = ts.replace(tzinfo=timezone.utc)
-                if ts > cutoff_14d and entry.get('event') == 'crash':
+                if ts > cutoff_14d and entry.get('event') == 'error':
                     metrics['crashes_14d'] += 1
             except Exception:
                 pass
@@ -138,14 +138,28 @@ def get_market_conditions() -> dict:
         'vix_30d_avg': None,
     }
 
-    for regime_file in ['regime_state.json', 'paper_portfolio.json']:
-        try:
-            with open(regime_file, encoding='utf-8') as f:
-                data = json.load(f)
-                if 'vixy' in data or 'regime' in data:
-                    conditions['vix']    = data.get('vixy', data.get('vix'))
-                    conditions['regime'] = data.get('regime')
+    # Read regime and vixy from bot_log.jsonl last cycle entry
+    try:
+        with open('bot_log.jsonl', encoding='utf-8') as f:
+            lines_raw = [l.strip() for l in f if l.strip()]
+        for raw in reversed(lines_raw):
+            try:
+                entry = json.loads(raw)
+                if entry.get('regime'):
+                    conditions['regime'] = entry.get('regime')
+                    conditions['vix']    = entry.get('vixy', entry.get('vix'))
                     break
+            except Exception:
+                pass
+    except Exception:
+        pass
+    # Fallback: try paper_portfolio.json
+    if not conditions['regime']:
+        try:
+            with open('paper_portfolio.json', encoding='utf-8') as f:
+                data = json.load(f)
+            conditions['vix']    = data.get('vixy', data.get('vix'))
+            conditions['regime'] = data.get('regime')
         except Exception:
             pass
 
@@ -265,11 +279,13 @@ def score_market_conditions(conditions: dict) -> tuple:
 
     # Regime
     if regime == 'flow':
-        passed.append('  [OK] Regime: FLOW -- best for this strategy (Sharpe 7.35)')
+        passed.append('  [OK] Regime: FLOW -- best for this strategy (Sharpe 8.62)')
     elif regime == 'neutral':
-        passed.append('  [OK] Regime: NEUTRAL -- solid (Sharpe 5.16)')
-    elif regime == 'volatility':
-        failed.append('  [NO] Regime: VOLATILITY -- strategy underperforms (Sharpe 0.75)')
+        passed.append('  [OK] Regime: NEUTRAL -- solid (Sharpe 4.54)')
+    elif regime == 'volatility-cautious':
+        failed.append('  [!!] Regime: VOLATILITY-CAUTIOUS -- reduced entries (Sharpe 7.77)')
+    elif regime == 'volatility-defensive':
+        failed.append('  [NO] Regime: VOLATILITY-DEFENSIVE -- no new entries (Sharpe -1.52)')
     elif regime == 'crisis':
         failed.append('  [NO] Regime: CRISIS -- do not launch')
     else:

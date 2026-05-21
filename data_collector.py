@@ -1057,7 +1057,7 @@ def get_congress_trades(symbol: str, days: int = 90) -> dict:
 
         for tx in all_trades:
             # Normalize ticker field — both APIs use 'ticker'
-            ticker = str(tx.get('ticker', tx.get('asset_ticker', ''))).upper().strip()
+            ticker = str(tx.get('ticker', tx.get('asset_ticker', '')) or '').upper().strip()
             if ticker != sym_upper or ticker == '--':
                 continue
 
@@ -1143,57 +1143,64 @@ def get_earnings_surprise_tickers(days_back: int = 5,
         cutoff  = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
         headers = {'Authorization': f'Bearer {token}'}
 
-        # Fetch market-wide recent earnings from UW
-        # Use afterhours + premarket endpoints to get recent reporters
-        candidates = []
-        for endpoint in ['afterhours', 'premarket']:
-            try:
-                url = f'{UW_BASE_URL}/earnings/{endpoint}'
-                r   = requests.get(url, headers=headers, timeout=12)
-                if r.status_code != 200:
-                    continue
-                data = r.json().get('data', [])
-                for item in data:
-                    date = item.get('date', '') or item.get('earnings_date', '')
-                    if not date or date < cutoff:
-                        continue
-                    sym = (item.get('symbol') or item.get('ticker') or '').upper()
-                    if not sym:
-                        continue
-                    candidates.append(sym)
-            except Exception:
-                continue
-
-        # For each candidate, fetch EPS surprise
+        # Fetch past earnings day by day using the date param
+        # afterhours endpoint with ?date=YYYY-MM-DD returns reporters for that date
         results = []
         seen    = set()
-        for sym in candidates:
-            if sym in seen or not sym:
-                continue
-            seen.add(sym)
+        from datetime import datetime as _dt, timedelta as _td
+
+        for days_back in range(0, days_back + 1):
+            date_str = (_dt.now() - _td(days=days_back)).strftime('%Y-%m-%d')
             try:
-                url = f'{UW_BASE_URL}/earnings/{sym}'
-                r   = requests.get(url, headers=headers, timeout=8)
+                url = f'{UW_BASE_URL}/earnings/afterhours'
+                r   = requests.get(url, headers=headers,
+                                   params={'date': date_str}, timeout=12)
                 if r.status_code != 200:
                     continue
-                data = r.json().get('data', [])
-                if not data:
-                    continue
-                # Most recent report
-                latest = data[0] if isinstance(data, list) else data
-                eps_est    = latest.get('street_mean_est') or latest.get('eps_estimate') or latest.get('estimate')
-                eps_actual = latest.get('actual_eps') or latest.get('eps_actual') or latest.get('actual')
-                report_date = latest.get('report_date') or latest.get('date', '')
+                day_data = r.json().get('data', [])
+                for item in day_data:
+                    sym = (item.get('symbol') or item.get('ticker') or '').upper()
+                    if not sym or sym in seen:
+                        continue
+                    eps_est    = item.get('street_mean_est')
+                    eps_actual = item.get('actual_eps')
+                    report_date = item.get('report_date', date_str)
 
-                if not report_date or report_date < cutoff:
-                    continue
-                if eps_est is None or eps_actual is None:
-                    continue
-                if float(eps_est) == 0:
-                    continue
+                    if eps_est is None or eps_actual is None:
+                        continue
+                    try:
+                        est_f = float(eps_est)
+                        act_f = float(eps_actual)
+                    except (TypeError, ValueError):
+                        continue
+                    if est_f == 0:
+                        continue
 
-                surprise_pct = (float(eps_actual) - float(eps_est)) / abs(float(eps_est)) * 100
-                if abs(surprise_pct) >= min_surprise_pct:
+                    surprise_pct = (act_f - est_f) / abs(est_f) * 100
+                    # ── Quality filters (all must pass) ──────────────────
+                    # 1. Cap surprise at ±100% — eliminates broken EPS calcs
+                    #    where near-zero estimate produces absurd percentages
+                    if abs(surprise_pct) > 100.0:
+                        continue
+                    # 2. Minimum surprise threshold
+                    if abs(surprise_pct) < min_surprise_pct:
+                        continue
+                    # 3. Must have options — proxy for liquidity and size
+                    if not item.get('has_options', False):
+                        continue
+                    # 4. Minimum market cap $5B — ensures UW has flow/dark pool data
+                    #    Below this threshold, options flow signals are too sparse
+                    marketcap = float(item.get('marketcap') or 0)
+                    if marketcap < 1_000_000_000:
+                        continue
+                    # 5. Russell 3000 proxy — marketcap $500M+ with options
+                    #    Russell 3000 covers ~98% of US market cap down to ~$500M
+                    #    Combined with has_options and $5B floor above, this catches
+                    #    mid/large caps with real options flow data in UW
+                    #    (No direct Russell 3000 membership flag in UW API)
+                    if marketcap < 500_000_000:
+                        continue
+                    seen.add(sym)
                     direction = 'bullish' if surprise_pct > 0 else 'bearish'
                     results.append({
                         'symbol':       sym,
@@ -1201,6 +1208,8 @@ def get_earnings_surprise_tickers(days_back: int = 5,
                         'surprise_pct': round(surprise_pct, 2),
                         'direction':    direction,
                         'report_date':  report_date,
+                        'marketcap':    marketcap,
+                        'sector':       sector,
                     })
             except Exception:
                 continue
@@ -1276,7 +1285,7 @@ def get_politician_tickers(days: int = 14, min_buy_count: int = 1,
         # Group buys by symbol
         buys_by_symbol = {}
         for t in all_trades:
-            sym  = t.get('ticker', '').upper().strip()
+            sym  = (t.get('ticker') or '').upper().strip()
             date = t.get('disclosure_date') or t.get('date_recieved') or ''
             txn  = t.get('type', '').lower()
             if not sym or not date or ('buy' not in txn and 'purchase' not in txn):
