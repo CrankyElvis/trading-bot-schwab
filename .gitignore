@@ -1,8 +1,37 @@
+# Secrets — CRITICAL
 .env
+.env.*
+token.json
+paper_token.json
+*token.json
+*credentials*
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Logs & runtime data
+*.log
+bot_log.jsonl
+*.jsonl
 __pycache__/
 *.pyc
-bot_log.jsonl
-paper_portfolio.json
-paper_token.json
-regime_state.json
-token.json
+.pytest_cache/
+
+# Databases
+data/
+*.db
+*.sqlite
+
+# Backtest outputs
+backtest_results/
+*.csv
+*.parquet
+
+# OS / editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

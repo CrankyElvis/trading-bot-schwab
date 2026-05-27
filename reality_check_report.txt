@@ -1,0 +1,154 @@
+# Reality Check Report
+# Generated: 2026-05-25 20:23:56
+
+Loaded:
+   1243 trades
+    192 (ticker, strategy) headline rows
+     47 score-matrix cells
+
+================================================================================
+  Q1: Are returns in BELIEVABLE ranges?
+================================================================================
+
+  Compares each (ticker, strategy) return to the rough bounds of what's
+  plausible for a 1-year systematic strategy. Returns far outside these
+  bounds usually mean look-ahead bias, accounting bug, or extreme luck.
+
+  BUY_HOLD     bounds: [-50%, +100%]   in-range: 37/48 (77%)   [FLAG]
+  LONG_CALL    bounds: [-80%, +60%]   in-range: 35/48 (73%)   [FLAG]
+  PURE_CSP     bounds: [-10%, +20%]   in-range: 42/48 (88%)   [OK]
+  WHEEL        bounds: [-15%, +25%]   in-range: 40/48 (83%)   [OK]
+
+  Outliers (worth investigating):
+    [HIGH] MU: +692.9% (believable max: +100%)
+    [HIGH] LRCX: +264.2% (believable max: +100%)
+    [HIGH] MRVL: +216.8% (believable max: +100%)
+    [LOW]  MSTR: -58.9% (believable min: -50%)
+    [LOW]  VIXY: -53.4% (believable min: -50%)
+    [HIGH] MU: +733.8% (believable max: +60%)
+    [HIGH] MRVL: +385.9% (believable max: +60%)
+    [HIGH] AMAT: +362.9% (believable max: +60%)
+    [HIGH] LRCX: +21.7% (believable max: +20%)
+    [HIGH] AVGO: +20.5% (believable max: +20%)
+    [LOW]  NFLX: -77.1% (believable min: -10%)
+    [LOW]  XLE: -40.9% (believable min: -10%)
+    [LOW]  XLK: -29.9% (believable min: -10%)
+    [HIGH] TSLA: +38.5% (believable max: +25%)
+    [HIGH] AVGO: +34.0% (believable max: +25%)
+
+================================================================================
+  Q2: Does SCORE predict outcomes?  *** THE KEY QUESTION ***
+================================================================================
+
+  If the signal stack has real edge, HIGHER scores should produce HIGHER
+  avg P&L within each (strategy, regime). Test: is the ordering
+  LOW < MEDIUM < HIGH for avg_pnl?  Reversed or flat = no edge.
+
+
+  LONG_CALL   neutral                REVERSED (negative edge)
+                                 LOW=$+7729 < MEDIUM=$+1279
+  PURE_CSP    neutral                MIXED (no edge)
+                                 LOW=$-35 < MEDIUM=$+137 < HIGH=$+84
+  WHEEL       neutral                MIXED (no edge)
+                                 LOW=$-225 < MEDIUM=$-790 < HIGH=$+206
+
+  Score signal validation: 0/3 (0%) (strategy, regime) combos show monotonic edge.
+  VERDICT: Score does NOT systematically predict outcomes.
+           Signal stack may be noise on this dataset.
+           Primary backtester's headline returns are suspect.
+
+================================================================================
+  Q3: Do findings REPLICATE across tickers?
+================================================================================
+
+  For each strategy, what fraction of tickers show similar performance?
+  If 1-2 tickers carry all the returns, that's not a strategy -- that's
+  ticker selection luck.
+
+  BUY_HOLD      n_tickers= 48  median= +39.1%  mean= +60.6%  sd=111.6%  positive=39/48
+  LONG_CALL     n_tickers= 48  median=  -6.8%  mean= +49.0%  sd=148.1%  positive=21/48
+               -> MOSTLY LOSING (21/48 positive)
+  PURE_CSP      n_tickers= 48  median=  +4.3%  mean=  +2.6%  sd= 15.7%  positive=41/48
+  WHEEL         n_tickers= 48  median=  +3.7%  mean=  +1.9%  sd= 19.9%  positive=36/48
+
+================================================================================
+  Q4: Does any option strategy BEAT BUY_HOLD?
+================================================================================
+
+  For each ticker, compare each option strategy's Sharpe and return
+  to BUY_HOLD. Strategies must beat BUY_HOLD on RISK-ADJUSTED basis
+  to justify their complexity.
+
+  WHEEL        vs BUY_HOLD
+    beats return:    9/48 tickers   (avg diff:  -58.7%)
+    beats Sharpe:    8/48 tickers   (avg diff: -1.545)
+
+  PURE_CSP     vs BUY_HOLD
+    beats return:    8/48 tickers   (avg diff:  -58.0%)
+    beats Sharpe:   12/48 tickers   (avg diff: -1.511)
+
+  LONG_CALL    vs BUY_HOLD
+    beats return:   13/48 tickers   (avg diff:  -11.6%)
+    beats Sharpe:    4/48 tickers   (avg diff: -1.442)
+
+  INTERPRETATION:
+    'Beats Sharpe' is the meaningful metric -- it measures alpha
+    after accounting for risk. If a strategy beats BUY_HOLD on
+    Sharpe <50% of tickers, it's not a strategy, it's overhead.
+
+================================================================================
+  Q5: SANITY CHECK vs Primary Backtester
+================================================================================
+
+  The primary backtester ran on a 256-ticker universe over 5 years with
+  many strategies stacked. The multi-strategy ran ~22 tickers x 1 year
+  with 4 isolated strategies. Big differences in scope -- but the
+  ORDER OF MAGNITUDE for typical option strategy returns should align.
+
+  Primary backtester:
+    Annual return:     +185.0%   Sharpe: 1.914   MaxDD: 5.6%
+
+  Multi-strategy (per (ticker, strategy), 1yr):
+    Best:            MU / LONG_CALL: +733.8%   Sharpe: 1.579
+    Worst:           NFLX / PURE_CSP: -77.1%   Sharpe: -1.036
+    Median:          +5.5% across all combos
+
+  *** RED FLAG ***
+  Primary claims 185%/yr but multi-strategy median is 5.5%.
+  The primary's headline likely comes from:
+    - Signal proxies with look-ahead bias (politician/insider)
+    - Stacking many strategies + protective rules tuned to history
+    - Lucky ticker concentration on the 256-name universe
+  Live trading returns will be FAR lower than the backtest implies.
+
+################################################################################
+  OVERALL VERDICT
+################################################################################
+
+  This is a REALITY CHECK, not a tuning report.
+
+  The honest path forward:
+
+  IF the score signal is monotonic (Q2 shows >60% monotonic):
+    - Real edge exists in some configurations
+    - Don't change weights based on this dataset (would be overfit)
+    - Add score logging to live paper bot for OUT-OF-SAMPLE validation
+    - Re-evaluate in 3-6 months with real forward-looking data
+
+  IF the score signal is mixed or absent (Q2 shows <40% monotonic):
+    - Primary backtester's headline is largely artifact
+    - Top priorities: fix look-ahead bias in politician/insider signals
+    - Don't add new features, signals, or strategies until base is honest
+    - Revise live bot expectations down significantly
+
+  WHAT TO AVOID (overfitting traps):
+    - Raising MIN_SCORE because high scores 'worked' on this data
+    - Disabling strategies in regimes where they 'failed' (small sample)
+    - Reweighting signals based on edge column (already flagged as biased)
+    - Any change that just makes the historical Sharpe number bigger
+
+  WHAT IS LEGITIMATE:
+    - Fixing actual bugs (CSP simulation, accounting errors)
+    - Replacing biased signal proxies with real data sources
+    - Logging scores/decisions/outcomes for future validation
+    - Acknowledging that backtests cap at ~Sharpe 1.0 for honest models

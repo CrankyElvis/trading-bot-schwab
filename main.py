@@ -14,6 +14,12 @@ Cycle order:
   7. Watchlist candidates or live scoring
   8. Execute equity trades + options signals
   9. Log cycle and sleep
+
+PATCH (2026-05-26): evaluate_options() now receives the Schwab client so
+options_manager can fetch live option chains (with greeks) instead of using
+Black-Scholes estimates. The chain_logger persists every chain to
+chains_live.db for later analysis. Score logging also active via the patched
+flow_momentum.py + score_logger.py.
 """
 
 import time
@@ -52,6 +58,23 @@ from paper_trader import (
     load_portfolio, paper_buy, paper_sell,
     print_portfolio_summary, estimate_fees,
 )
+
+# ── Phase 0 validation harness — snapshot capture + version tracking ──
+# Best-effort imports — bot continues to function even if these modules
+# are missing or fail. Every call site wraps in try/except for safety.
+try:
+    from bot_version import get_or_create_version_id
+    from snapshot_capture import archive_snapshot, archive_decisions
+    _SNAPSHOT_CAPTURE_AVAILABLE = True
+except ImportError as e:
+    print(f"  [validation] snapshot_capture unavailable: {e}")
+    _SNAPSHOT_CAPTURE_AVAILABLE = False
+    def get_or_create_version_id(*args, **kwargs): return None
+    def archive_snapshot(*args, **kwargs): return None
+    def archive_decisions(*args, **kwargs): return 0
+
+# Bot version is computed once at startup, cached in this module.
+_BOT_VERSION_ID = None
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -519,6 +542,29 @@ def run_cycle(client):
     print("\n📊 Market open — running full trading cycle...")
     snapshot = collect_snapshot(client, cycle_universe)
 
+    # ── Phase 0: archive snapshot for validation harness ──────────────────
+    # Captures live UW flow, dark pool, quotes, regime, macro — all the
+    # decision context that's irretrievable from historical APIs.
+    cycle_id = None
+    try:
+        # Try to also fetch macro state if available (already imported above)
+        try:
+            macro_state = evaluate_macro(use_cache=True)
+        except Exception:
+            macro_state = None
+        cycle_id = archive_snapshot(
+            snapshot=snapshot,
+            regime_state=regime_state,
+            term_structure=term_structure,
+            macro_state=macro_state,
+            cycle_name=cycle_name,
+            version_id=_BOT_VERSION_ID,
+            injected_symbols=injected_symbols,
+            universe_size=len(cycle_universe),
+        )
+    except Exception as e:
+        print(f"  [validation] archive_snapshot failed (non-fatal): {e}")
+
     # Pre-fetch float-adjusted dark pool thresholds for all symbols
     print("  Fetching float-adjusted dark pool thresholds...")
     dp_thresholds = get_dp_thresholds_bulk(client, DEFAULT_UNIVERSE)
@@ -526,6 +572,7 @@ def run_cycle(client):
     # ── Step 5: Risk checks ───────────────────────────────────────────────────
     print("\n🛡️  Running risk checks...")
     passed_symbols = []
+    blocked_symbols = {}  # symbol -> [blocker_reasons] for validation capture
     for symbol in DEFAULT_UNIVERSE:
         result = run_risk_checks(
             symbol=symbol,
@@ -538,12 +585,23 @@ def run_cycle(client):
         if result.passed:
             passed_symbols.append(symbol)
         else:
+            blocked_symbols[symbol] = list(result.blockers)
             print(f"  🚫 {symbol} blocked: {', '.join(result.blockers)}")
 
     print(f"  ✅ {len(passed_symbols)}/{len(DEFAULT_UNIVERSE)} symbols passed risk checks")
 
     if not passed_symbols:
         print("  ⏸  All symbols blocked — no trades this cycle")
+        # Phase 0: still capture blocker decisions so we know WHY no trades happened
+        try:
+            archive_decisions(
+                cycle_id=cycle_id, version_id=_BOT_VERSION_ID,
+                scored_results=[], passed_risk=passed_symbols,
+                blocked=blocked_symbols, candidates=[], traded=[],
+                injected_symbols=injected_symbols,
+            )
+        except Exception as e:
+            print(f"  [validation] archive_decisions failed (non-fatal): {e}")
         log_cycle({'event': 'all_blocked', 'regime': regime_state.regime,
                    'timestamp': cycle_start.isoformat()})
         return
@@ -608,6 +666,7 @@ def run_cycle(client):
     print("\n🔍 Checking pre-market watchlist...")
     watchlist    = load_watchlist()
     trade_results = []
+    scored_results_for_archive = []  # populated by either watchlist or live-score path
 
     if watchlist:
         print(f"  ✅ Watchlist from {watchlist.get('scanned_at','unknown')[:19]}")
@@ -634,6 +693,7 @@ def run_cycle(client):
                 )
                 for c in wl_candidates[:MAX_CANDIDATES]
             ]
+            scored_results_for_archive = candidates  # watchlist only knows winners
         else:
             print("  ⏸  No watchlist candidates passed risk checks")
             candidates = []
@@ -651,6 +711,7 @@ def run_cycle(client):
         )
         print_cycle_result(score_result)
         candidates = score_result.candidates
+        scored_results_for_archive = score_result.all_scores  # full universe scores
 
     # ── Step 8: Execute equity trades ─────────────────────────────────────────
     if candidates:
@@ -666,6 +727,9 @@ def run_cycle(client):
         print("\n⏸  No qualifying equity trades — cash stays parked")
 
     # ── Step 9: Options signals ────────────────────────────────────────────────
+    # PATCH (2026-05-26): pass `client` so options_manager can fetch live
+    # Schwab option chains (with greeks) via chain_logger. Without `client`,
+    # options_manager falls back to Black-Scholes estimates.
     print("\n🎯 Evaluating options signals...")
     portfolio        = load_portfolio()
     options_eval     = evaluate_options(
@@ -674,6 +738,7 @@ def run_cycle(client):
         quotes=all_quotes,
         vixy=vixy,
         regime=regime_state.regime,
+        client=client,
     )
     print_options_summary(options_eval)
 
@@ -743,6 +808,20 @@ def run_cycle(client):
     print("\n📄 End-of-cycle portfolio:")
     print_portfolio_summary(client)
 
+    # ── Phase 0: archive per-ticker decisions for validation harness ──
+    try:
+        archive_decisions(
+            cycle_id=cycle_id, version_id=_BOT_VERSION_ID,
+            scored_results=scored_results_for_archive,
+            passed_risk=passed_symbols,
+            blocked=blocked_symbols,
+            candidates=candidates,
+            traded=trade_results,
+            injected_symbols=injected_symbols,
+        )
+    except Exception as e:
+        print(f"  [validation] archive_decisions failed (non-fatal): {e}")
+
     log_cycle({
         'event':         'trading_cycle',
         'regime':        regime_state.regime,
@@ -776,6 +855,18 @@ def main():
         if confirm != 'CONFIRM':
             print("Aborted.")
             return
+
+    # Compute bot version fingerprint (SHA256 of all .py files in /root/trading-bot)
+    # Every snapshot and decision written this run will FK to this version_id,
+    # making "did this code change shift live behavior?" queryable later.
+    global _BOT_VERSION_ID
+    try:
+        _BOT_VERSION_ID = get_or_create_version_id()
+        if _BOT_VERSION_ID is not None:
+            print(f"📋 Bot version_id: {_BOT_VERSION_ID}")
+    except Exception as e:
+        print(f"  [validation] version_id init failed (non-fatal): {e}")
+        _BOT_VERSION_ID = None
 
     cycle_count = 0
     while True:

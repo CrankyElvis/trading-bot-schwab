@@ -6,6 +6,7 @@ import json
 import math
 import argparse
 import warnings
+import csv
 import itertools
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -919,6 +920,10 @@ def run_backtest(client, start=None, end=None, capital=STARTING_CAPITAL, years=5
     portfolio   = BacktestPortfolio(capital)
     prev_value  = capital
     last_regime = 'neutral'
+
+    # PATCH: Daily per-ticker score log — populated each day for offline analysis
+    daily_scores_log = []
+
     regime_streak       = 0
     pending_regime      = 'neutral'
     REGIME_CONFIRM_DAYS = 2
@@ -1083,6 +1088,22 @@ def run_backtest(client, start=None, end=None, capital=STARTING_CAPITAL, years=5
                 if symbol in portfolio.positions or symbol not in prices:
                     continue
                 score, sigs = score_symbol(symbol, date, history, spy_hist, vix)
+
+                # PATCH: log every scored ticker for offline analysis (qualified or not)
+                row = {
+                    'date':      dt.strftime('%Y-%m-%d'),
+                    'ticker':    symbol,
+                    'price':     round(float(prices.get(symbol, 0)), 2),
+                    'regime':    regime,
+                    'vix':       round(vix, 2),
+                    'score':     round(score, 4),
+                    'qualified': score >= MIN_SCORE,
+                }
+                for k, v in (sigs or {}).items():
+                    if isinstance(v, (int, float)):
+                        row[f'sig_{k}'] = round(float(v), 3)
+                daily_scores_log.append(row)
+
                 if score >= MIN_SCORE:
                     scores[symbol] = (score, sigs)
 
@@ -1129,6 +1150,64 @@ def run_backtest(client, start=None, end=None, capital=STARTING_CAPITAL, years=5
                         portfolio.buy(symbol, pos_dollars, effective_cost, dt, regime,
                                       signals=sigs, is_parking=False)
                         portfolio.total_fees += premium_est * -1  # premium = income
+                        continue
+
+                # ── Long Call (flow regime, score >= 0.90) ────────────────
+                # Buy a 30-delta call at 45 DTE
+                # Simulate: call costs ~3% of stock price (ATM call premium estimate)
+                # Outcome: if stock rises > 5% by exit → 3-5x premium, else lose premium
+                elif regime == 'flow' and score >= 0.90:
+                    call_premium  = price * 0.03       # ~3% of stock price per contract
+                    contracts     = max(1, int(portfolio.cash * 0.10 / (call_premium * 100)))
+                    cost          = call_premium * contracts * 100
+                    if cost <= portfolio.cash * 0.10:
+                        sigs['call_entry']   = True
+                        sigs['call_strike']  = round(price * 1.02, 2)  # slight OTM
+                        sigs['call_premium'] = call_premium
+                        # Model as equity position at effective cost with leverage
+                        # Long call profits if stock moves up — model entry at price
+                        # with tighter stop (premium at risk only)
+                        portfolio.buy(symbol, cost, call_premium, dt, regime,
+                                      signals=sigs, is_parking=False)
+                        continue
+
+                # ── Bull Put Spread (vol-cautious regime, score >= 0.80) ──────────
+                # Sell OTM put, buy lower strike put for protection
+                # Net credit = difference in premiums (~0.8% of stock price estimate)
+                # Max loss = spread width minus credit (~2% of stock price)
+                elif regime == 'volatility-cautious' and score >= 0.80:
+                    spread_width  = price * 0.05       # 5% wide spread
+                    net_credit    = price * 0.008      # ~0.8% net credit
+                    max_loss      = spread_width - net_credit
+                    contracts     = max(1, int(portfolio.cash * 0.10 / (max_loss * 100)))
+                    cost          = max_loss * contracts * 100  # capital at risk
+                    if cost <= portfolio.cash * 0.10:
+                        sigs['spread_entry']  = True
+                        sigs['spread_credit'] = net_credit * contracts * 100
+                        sigs['spread_type']   = 'bull_put'
+                        # Model as equity at effective cost = upper strike - credit
+                        effective_cost = (price * 0.95) - net_credit
+                        portfolio.buy(symbol, cost, effective_cost, dt, regime,
+                                      signals=sigs, is_parking=False)
+                        portfolio.total_fees += net_credit * contracts * 100 * -1
+                        continue
+
+                # ── Iron Condor (neutral regime, score 0.50-0.70, low directional) ─
+                # Sell OTM call spread + OTM put spread
+                # Profits when stock stays in range (±5%)
+                # Net credit ~1.2% of stock price, max loss ~3.8%
+                elif regime == 'neutral' and 0.50 <= score <= 0.70 and sigs.get('direction') == 'neutral':
+                    net_credit = price * 0.012
+                    max_loss   = price * 0.038
+                    contracts  = max(1, int(portfolio.cash * 0.08 / (max_loss * 100)))
+                    cost       = max_loss * contracts * 100
+                    if cost <= portfolio.cash * 0.08:
+                        sigs['condor_entry']  = True
+                        sigs['condor_credit'] = net_credit * contracts * 100
+                        effective_cost = max_loss - net_credit
+                        portfolio.buy(symbol, cost, effective_cost, dt, regime,
+                                      signals=sigs, is_parking=False)
+                        portfolio.total_fees += net_credit * contracts * 100 * -1
                         continue
 
                 # ── Standard equity buy (score 0.50-0.84) ────────────────
@@ -1254,6 +1333,7 @@ def run_backtest(client, start=None, end=None, capital=STARTING_CAPITAL, years=5
     spy_return = (spy_end - spy_start) / spy_start
 
     results = compile_results(portfolio, actual_start, actual_end, capital)
+    results['daily_scores_log'] = daily_scores_log   # PATCH: attach scores log
     results['benchmark'] = {
         'spy_start':      round(spy_start, 2),
         'spy_end':        round(spy_end, 2),
@@ -1370,7 +1450,13 @@ def compile_results(portfolio, start, end, capital) -> dict:
     # CSP stats
     csp_trades   = [t for t in sell_trades if t.entry_signals.get('csp_entry')]
     eq_trades    = [t for t in sell_trades if not t.entry_signals.get('csp_entry')]
-    csp_premium  = sum(t.entry_signals.get('csp_premium', 0) for t in csp_trades)
+    csp_premium   = sum(t.entry_signals.get('csp_premium', 0) for t in csp_trades)
+    call_trades   = [t for t in trades if t.entry_signals.get('call_entry')]
+    spread_trades = [t for t in trades if t.entry_signals.get('spread_entry')]
+    condor_trades = [t for t in trades if t.entry_signals.get('condor_entry')]
+    call_pnl      = sum(t.pnl for t in call_trades)
+    spread_pnl    = sum(t.pnl for t in spread_trades)
+    condor_pnl    = sum(t.pnl for t in condor_trades)
 
     # Signal contributions
     signal_contrib = analyse_signals(sell_trades)
@@ -1389,6 +1475,12 @@ def compile_results(portfolio, start, end, capital) -> dict:
             'total_trades':      len(sell_trades),
             'csp_trades':        len(csp_trades),
             'csp_premium_total': round(csp_premium, 2),
+            'call_trades':       len(call_trades),
+            'call_pnl':          round(call_pnl, 2),
+            'spread_trades':     len(spread_trades),
+            'spread_pnl':        round(spread_pnl, 2),
+            'condor_trades':     len(condor_trades),
+            'condor_pnl':        round(condor_pnl, 2),
             'equity_trades':     len(eq_trades),
             'parking_pnl':       round(parking_pnl, 2),
             'total_fees':        round(portfolio.total_fees, 2),
@@ -1602,6 +1694,15 @@ def print_results(results, recs):
     print(f"  ── Entry breakdown ───────────────────────────────────")
     print(f"  CSP entries:        {s.get('csp_trades',0):>10}  "
           f"(premium collected: ${s.get('csp_premium_total',0):>+8,.2f})")
+    if s.get('call_trades', 0) > 0:
+        print(f"  Long call entries:        {s['call_trades']:>6}  "
+              f"(P&L: ${s.get('call_pnl',0):>+8,.2f})")
+    if s.get('spread_trades', 0) > 0:
+        print(f"  Bull put spread entries:  {s['spread_trades']:>6}  "
+              f"(P&L: ${s.get('spread_pnl',0):>+8,.2f})")
+    if s.get('condor_trades', 0) > 0:
+        print(f"  Iron condor entries:      {s['condor_trades']:>6}  "
+              f"(P&L: ${s.get('condor_pnl',0):>+8,.2f})")
     print(f"  Equity entries:     {s.get('equity_trades',0):>10}")
 
     if 'benchmark' in results:
@@ -1718,9 +1819,11 @@ def print_results(results, recs):
 
 
 def export_csv(results, recs, prefix='backtest'):
+    # PATCH: include daily_scores in the export list
     for name, data in [('weekly', results['weekly']),
                        ('monthly', results['monthly']),
-                       ('daily', results['daily_snapshots'])]:
+                       ('daily', results['daily_snapshots']),
+                       ('daily_scores', results.get('daily_scores_log', []))]:
         if data:
             with open(f'{prefix}_{name}.csv', 'w', newline='') as f:
                 w = csv.DictWriter(f, fieldnames=data[0].keys())

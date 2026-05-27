@@ -24,6 +24,21 @@ Politician boosters (applied to signal 3):
   Premium > $50k          1.3x
   Multi-politician        2.0x
   Filed within 5 days     1.4x
+
+PATCH (2026-05-26): three signal scoring fixes after live diagnosis showed
+sig_dark_pool, sig_sweep_flow, and sig_insider returning 0 for every ticker:
+
+  1. score_sweep_flow: 4-hour timestamp cutoff was too narrow (rejected all
+     overnight, weekend, and pre-market data). Extended to 96 hours to
+     cover regular weekend (65h) and 3-day holiday weekend (89h) gaps.
+  2. score_dark_pool: the snapshot's market-wide 100-row DataFrame rarely
+     contained the symbol being scored. Now fetches per-symbol from
+     get_uw_dark_pool(symbol) with a session cache to control API load,
+     and extends the timestamp window to 96h for the same reason.
+  3. score_insider: the /insider/{symbol}/ticker-flow UW endpoint never
+     returned data. Now delegates to data_collector.score_sec_insider()
+     which uses SEC EDGAR Form 4 filings (already proven working in
+     data_collector). Falls back to 0.0 only if SEC path errors.
 """
 
 import time
@@ -33,6 +48,12 @@ from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 from dotenv import load_dotenv
 import os
+
+# PATCH: persist every scoring cycle for out-of-sample analysis
+try:
+    from score_logger import log_cycle
+except Exception:
+    def log_cycle(*args, **kwargs): pass   # graceful no-op if module missing
 
 load_dotenv()
 
@@ -120,6 +141,17 @@ MIN_SIGNALS_FIRING  = 3       # at least 3 of 10 signals must score > 0.30
 MIN_SWEEP_PREMIUM   = 500_000 # minimum UW sweep premium to count ($500k)
 REQUIRE_DIRECTION   = True    # only enter bullish signals in flow/neutral
 
+# PATCH (2026-05-26): scoring window for sweep_flow and dark_pool
+# Was: 4h sweep, 8h dark_pool — too narrow, killed all signals in pre-market
+# Now: 96h — covers worst-case market closure gaps:
+#   - Regular weekend: Fri close → Mon pre-market = 65h
+#   - 3-day holiday:   Thu close → Tue pre-market = 89h (e.g. Memorial Day)
+#   - 96h provides a safety margin above the 89h worst case.
+# Anything older than 4 days is genuinely stale and shouldn't influence
+# current scoring decisions.
+SWEEP_FLOW_WINDOW_HOURS = 96
+DARK_POOL_WINDOW_HOURS  = 96
+
 WEIGHTS = {
     'sweep_flow':    0.10,   # UW options sweep flow
     'dark_pool':     0.11,   # ⬆️ +0.01 from WSB reallocation — strong correlation
@@ -191,12 +223,46 @@ def _uw(endpoint: str, params: dict = None) -> dict:
         return {}
 
 
-# ── Signal 1: UW Sweep / Repeated Hits (weight 0.30) ─────────────────────────
+# ── PATCH: per-cycle dark pool cache ──────────────────────────────────────────
+# The scoring engine calls score_dark_pool() once per ticker. The old code
+# relied on a market-wide DataFrame from snapshot which rarely matched the
+# scored symbol. We now fetch per-symbol but cache within the run to avoid
+# duplicate API calls if the same symbol is scored twice in one cycle.
+
+_DARK_POOL_CACHE: dict = {}        # symbol -> (timestamp, DataFrame)
+_DARK_POOL_CACHE_TTL = 300         # 5 minutes — covers a full cycle's scoring loop
+
+
+def _get_dark_pool_for_symbol(symbol: str) -> pd.DataFrame:
+    """Fetch dark pool for one symbol with short-lived cache."""
+    now = time.time()
+    cached = _DARK_POOL_CACHE.get(symbol)
+    if cached and (now - cached[0]) < _DARK_POOL_CACHE_TTL:
+        return cached[1]
+
+    try:
+        from data_collector import get_uw_dark_pool
+        df = get_uw_dark_pool(symbol=symbol, limit=50)
+    except Exception as e:
+        print(f"  [!] dark pool fetch error ({symbol}): {e}")
+        df = pd.DataFrame()
+
+    _DARK_POOL_CACHE[symbol] = (now, df)
+    return df
+
+
+# ── Signal 1: UW Sweep / Repeated Hits (weight 0.10) ─────────────────────────
 
 def score_sweep_flow(symbol: str, uw_flow_df: pd.DataFrame) -> tuple[float, str]:
     """
     Scores based on options sweep orders and repeated hits.
     Returns (score 0-1, direction).
+
+    PATCH (2026-05-26): timestamp window extended from 4h to 96h. The 4h
+    cutoff rejected all overnight, after-hours, and early pre-market data.
+    96h covers the 3-day-weekend worst case (Thursday close to Tuesday
+    9:26am pre-market = 89h). Regular weekends (65h) and after-hours
+    pre-market are also covered.
     """
     if uw_flow_df is None or uw_flow_df.empty:
         return 0.0, 'neutral'
@@ -205,10 +271,18 @@ def score_sweep_flow(symbol: str, uw_flow_df: pd.DataFrame) -> tuple[float, str]
     if df.empty:
         return 0.0, 'neutral'
 
-    # Filter to last 4 hours
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=4)
+    # PATCH: 96-hour window (was 4h). Captures prior session across regular weekends AND
+    # 3-day holiday weekends (e.g. Memorial Day = 89h gap).
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=SWEEP_FLOW_WINDOW_HOURS)
     if 'timestamp' in df.columns:
-        df = df[df['timestamp'] >= cutoff]
+        # Ensure timestamp is tz-aware UTC for safe comparison
+        try:
+            ts = pd.to_datetime(df['timestamp'], utc=True, errors='coerce')
+            df = df.assign(timestamp=ts)
+            df = df[df['timestamp'].notna() & (df['timestamp'] >= cutoff)]
+        except Exception:
+            # If anything goes wrong with timestamp parsing, fall through with all rows
+            pass
 
     if df.empty:
         return 0.0, 'neutral'
@@ -259,23 +333,39 @@ def score_sweep_flow(symbol: str, uw_flow_df: pd.DataFrame) -> tuple[float, str]
     return min(score, 1.0), direction
 
 
-# ── Signal 2: Dark Pool Prints (weight 0.15) ──────────────────────────────────
+# ── Signal 2: Dark Pool Prints (weight 0.11) ──────────────────────────────────
 
 def score_dark_pool(symbol: str, dp_df: pd.DataFrame) -> float:
     """
     Scores based on dark pool block prints.
     Large off-exchange prints signal institutional accumulation.
+
+    PATCH (2026-05-26): the snapshot passes a market-wide 100-row dark pool
+    DataFrame. With ~9,000 listed stocks, that 100-row sample rarely
+    contains the symbol being scored — every score was 0. This function
+    now fetches the symbol's own dark pool data directly (cached within
+    the cycle) and uses a 96h window to cover holiday weekend gaps.
+
+    The dp_df argument is still accepted for backward compatibility but
+    ignored — kept so score_stock's existing call signature works.
     """
-    if dp_df is None or dp_df.empty:
+    # PATCH: fetch per-symbol from UW (cached) instead of filtering passed-in DF
+    df = _get_dark_pool_for_symbol(symbol)
+    if df is None or df.empty:
         return 0.0
 
-    df = dp_df[dp_df['symbol'] == symbol] if 'symbol' in dp_df.columns else dp_df
+    # PATCH: 96-hour window (was 8h) — same weekend-gap reason as sweep_flow
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=DARK_POOL_WINDOW_HOURS)
+    if 'timestamp' in df.columns:
+        try:
+            ts = pd.to_datetime(df['timestamp'], utc=True, errors='coerce')
+            df = df.assign(timestamp=ts)
+            df = df[df['timestamp'].notna() & (df['timestamp'] >= cutoff)]
+        except Exception:
+            pass
+
     if df.empty:
         return 0.0
-
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=8)
-    if 'timestamp' in df.columns:
-        df = df[df['timestamp'] >= cutoff]
 
     score = 0.0
     for _, row in df.iterrows():
@@ -292,7 +382,7 @@ def score_dark_pool(symbol: str, dp_df: pd.DataFrame) -> float:
     return min(score, 1.0)
 
 
-# ── Signal 3: Politician Flow (weight 0.15) ───────────────────────────────────
+# ── Signal 3: Politician Flow (weight 0.11) ───────────────────────────────────
 
 def score_politician(symbol: str) -> float:
     """
@@ -360,46 +450,22 @@ def score_politician(symbol: str) -> float:
 
 def score_insider(symbol: str) -> float:
     """
-    Scores based on recent insider buying (not selling — sells are noise).
+    Scores based on recent insider buying via SEC EDGAR Form 4 filings.
+
+    PATCH (2026-05-26): old implementation called UW /insider/{symbol}/ticker-flow
+    which never returned data — every score was 0. Switched to
+    data_collector.score_sec_insider() which uses SEC EDGAR Form 4 (free,
+    no auth, already proven working).
     """
-    data  = _uw(f'/insider/{symbol}/ticker-flow')
-    items = data.get('data', [])
-    if not items:
+    try:
+        from data_collector import score_sec_insider
+        return float(score_sec_insider(symbol, days=14))
+    except Exception as e:
+        print(f"  [!] score_insider SEC path failed ({symbol}): {e}")
         return 0.0
 
-    now    = datetime.now(timezone.utc)
-    cutoff = now - timedelta(days=14)
-    score  = 0.0
 
-    for item in items:
-        action = (item.get('transaction_type') or item.get('type') or '').lower()
-        if 'buy' not in action and 'purchase' not in action:
-            continue   # ignore sales
-
-        date_str = item.get('filed_at') or item.get('date') or ''
-        try:
-            dt = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            if dt < cutoff:
-                continue
-        except Exception:
-            continue
-
-        value = float(item.get('value') or item.get('amount') or 0)
-        if value >= 1_000_000:
-            score += 0.50
-        elif value >= 500_000:
-            score += 0.30
-        elif value >= 100_000:
-            score += 0.15
-        elif value >= 50_000:
-            score += 0.05
-
-    return min(score, 1.0)
-
-
-# ── Signal 5: Price / RVOL Confirmation (weight 0.10) ────────────────────────
+# ── Signal 5: Price / RVOL Confirmation (weight 0.05) ────────────────────────
 
 def score_price_rvol(symbol: str, price_history: dict, quotes: dict) -> float:
     """
@@ -445,7 +511,7 @@ def score_price_rvol(symbol: str, price_history: dict, quotes: dict) -> float:
     return min(score, 1.0)
 
 
-# ── Signal 6: GEX / Greek Exposure (weight 0.05) ─────────────────────────────
+# ── Signal 6: GEX / Greek Exposure (weight 0.03) ─────────────────────────────
 
 def score_gex(symbol: str) -> float:
     """
@@ -476,7 +542,7 @@ def score_gex(symbol: str) -> float:
         return 0.0
 
 
-# ── Signal 7: Market Tide (weight 0.05) ──────────────────────────────────────
+# ── Signal 7: Market Tide (weight 0.27) ──────────────────────────────────────
 
 def score_market_tide(spy_history: pd.DataFrame) -> float:
     """
@@ -500,7 +566,7 @@ def score_market_tide(spy_history: pd.DataFrame) -> float:
         return 0.0
 
 
-# ── Signal 8: Sector Tide (weight 0.05) ──────────────────────────────────────
+# ── Signal 8: Sector Tide (weight 0.22) ──────────────────────────────────────
 
 def score_sector_tide(symbol: str, price_history: dict) -> float:
     """
@@ -536,7 +602,7 @@ def score_sector_tide(symbol: str, price_history: dict) -> float:
         return 0.0
 
 
-# ── Signal 9: ETF Inflow / Outflow (weight 0.05) ─────────────────────────────
+# ── Signal 9: ETF Inflow / Outflow (weight 0.01) ─────────────────────────────
 
 def score_etf_flow(symbol: str) -> float:
     """
@@ -595,6 +661,11 @@ def score_stock(
 ) -> StockScore:
     """
     Runs all 9 signals for a single stock and returns a StockScore.
+
+    NOTE: dp_df argument is preserved for backward compatibility but is now
+    ignored by score_dark_pool() (which fetches per-symbol). main.py and
+    pre_market_scanner.py can continue to pass the market-wide dp_df with no
+    behavior change.
     """
     signals  = {}
     weighted = {}
@@ -604,7 +675,7 @@ def score_stock(
     signals['sweep_flow']  = s1
     weighted['sweep_flow'] = s1 * WEIGHTS['sweep_flow']
 
-    # 2. Dark pool
+    # 2. Dark pool — dp_df ignored, fetched per-symbol inside the function
     s2 = score_dark_pool(symbol, dp_df)
     signals['dark_pool']  = s2
     weighted['dark_pool'] = s2 * WEIGHTS['dark_pool']
@@ -614,7 +685,7 @@ def score_stock(
     signals['politician']  = s3
     weighted['politician'] = s3 * WEIGHTS['politician']
 
-    # 4. Insider
+    # 4. Insider — now via SEC EDGAR Form 4
     s4 = score_insider(symbol)
     signals['insider']  = s4
     weighted['insider'] = s4 * WEIGHTS['insider']
@@ -691,6 +762,10 @@ def run_scoring_cycle(
     Returns:
         CycleResult with qualified candidates sorted by score descending
     """
+    # PATCH (2026-05-26): clear per-symbol dark pool cache at start of each cycle.
+    # Each scoring cycle should start with fresh data.
+    _DARK_POOL_CACHE.clear()
+
     dynamic_max = get_max_candidates(portfolio_value) if portfolio_value > 0 else MAX_CANDIDATES
     uw_flow    = snapshot.get('uw_flow', {})
     dp_df      = snapshot.get('uw_darkpool', pd.DataFrame())
@@ -749,13 +824,35 @@ def run_scoring_cycle(
     if regime == 'crisis':
         candidates = [c for c in candidates if c.direction != 'bearish']
 
-    return CycleResult(
+    result = CycleResult(
         candidates=candidates,
         all_scores=all_scores,
         cycle_time=datetime.now().isoformat(),
         regime=regime,
         signals_fired=signals_fired,
     )
+
+    # PATCH: persist this cycle to scores_live.db for out-of-sample analysis.
+    # Pull current VIX from snapshot if available; never let logging break the cycle.
+    try:
+        vix_val = snapshot.get('vix')
+        if vix_val is None:
+            # snapshot might use 'vixy' key per the smoke test pattern
+            vix_val = snapshot.get('vixy')
+        log_cycle(
+            result,
+            regime=regime,
+            vix=vix_val,
+            portfolio_value=portfolio_value,
+            fg_score=fg_score,
+            fg_modifier=fg_mod,
+            pc_ratio=pc.get('ratio'),
+            pc_modifier=pc_mod,
+        )
+    except Exception as _e:
+        print(f"  [score_logger] WARNING: log call failed: {_e}")
+
+    return result
 
 
 # ── Display ───────────────────────────────────────────────────────────────────

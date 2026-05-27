@@ -15,7 +15,14 @@ Manages two options strategies:
    - Let expire or buy back at 80% profit
 
 Note: Options execution uses Schwab's options API.
-Paper trading simulates options P&L using Black-Scholes approximation.
+
+PATCH (2026-05-26): When `client` is passed, evaluate_csp() and
+evaluate_long_call() now fetch the LIVE Schwab options chain via
+chain_logger.fetch_and_log_chain(). Real bid/ask/IV/delta replace
+the Black-Scholes + estimate_iv(vixy) approximation. Every chain
+fetch is persisted to chains_live.db for later analysis.
+
+If `client` is None (legacy callers), the BS estimate path is preserved.
 """
 
 import os
@@ -28,6 +35,18 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from data_collector import get_stock_ivr
+
+# PATCH: live chain fetch + persistence. Optional -- falls back to BS estimates
+# if chain_logger is unavailable or returns nothing.
+try:
+    from chain_logger import fetch_and_log_chain, find_strike
+    _CHAIN_LOGGER_OK = True
+except Exception as _e:
+    def fetch_and_log_chain(*args, **kwargs): return None
+    def find_strike(*args, **kwargs): return None
+    _CHAIN_LOGGER_OK = False
+    print(f"  [options_manager] chain_logger unavailable: {_e} -- "
+          f"using BS estimates only")
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -46,7 +65,7 @@ COVERED_CALL_IV_MINIMUM  = 20.0  # only sell calls when IV > 20%
 PARKING_TICKERS = ['GLD', 'SCHP', 'VTIP', 'GDX']
 
 
-# ── Black-Scholes Approximation ───────────────────────────────────────────────
+# ── Black-Scholes Approximation (fallback when chain unavailable) ────────────
 
 def bs_call_price(S, K, T, r, sigma) -> float:
     """
@@ -118,11 +137,15 @@ def evaluate_long_call(
     vixy:       float,
     regime:     str,
     idle_cash:  float,
+    client    = None,        # PATCH: optional Schwab client for live chain
 ) -> OptionsSignal | None:
     """
     Evaluates whether to buy a long call on a high-conviction symbol.
     Only fires in flow regime with score > 0.85.
     Returns OptionsSignal or None.
+
+    If `client` is provided, fetches the live Schwab option chain (and logs it),
+    then uses the real strike/premium/IV/delta. Falls back to BS estimate otherwise.
     """
     if regime != 'flow':
         return None
@@ -131,30 +154,72 @@ def evaluate_long_call(
     if last_price <= 0 or idle_cash <= 0:
         return None
 
-    # Strike: 5% OTM
+    # PATCH: try to fetch real chain first
+    chain = None
+    if client is not None:
+        chain = fetch_and_log_chain(client, symbol,
+                                     requested_by='evaluate_long_call',
+                                     dte_min=21, dte_max=60)
+
+    # Pick strike from real chain if available, else BS path
+    if chain and chain.get('strikes'):
+        # Try to find the strike closest to 5% OTM with real data
+        s = find_strike(chain, side='call', target_otm_pct=LONG_CALL_OTM_PCT)
+        if s and s.get('mid') and s['mid'] > 0:
+            strike       = float(s['strike'])
+            expiry       = s['expiration']
+            dte          = int(s.get('dte') or LONG_CALL_DTE_TARGET)
+            premium      = float(s['mid'])
+            real_iv      = s.get('iv')
+            real_delta   = s.get('delta')
+
+            # Position sizing
+            budget    = idle_cash * LONG_CALL_POSITION_PCT
+            contracts = max(1, min(5, int(budget / (premium * 100))))
+            total_cost = round(premium * contracts * 100, 2)
+            if total_cost > idle_cash * 0.10:
+                contracts  = max(1, int(idle_cash * 0.10 / (premium * 100)))
+                total_cost = round(premium * contracts * 100, 2)
+
+            extras = []
+            if real_iv is not None:    extras.append(f"IV={real_iv:.1f}")
+            if real_delta is not None: extras.append(f"delta={real_delta:.2f}")
+            iv_label = f"IV={real_iv:.1f}" if real_iv is not None else f"IV~{estimate_iv(vixy):.1%}"
+
+            return OptionsSignal(
+                symbol=symbol,
+                action='buy_call',
+                strike=strike,
+                expiry=expiry,
+                estimated_premium=round(premium, 4),
+                contracts=contracts,
+                estimated_cost=total_cost,
+                reason=(f"High-conviction flow signal (score={score:.3f}), "
+                        f"live chain {' '.join(extras)} DTE={dte}"),
+                score=score,
+            )
+        # Chain fetched but no usable strike -- fall through to BS estimate
+
+    # ── Fallback: BS estimate path (legacy behavior) ─────────────────────────
     strike = round(last_price * (1 + LONG_CALL_OTM_PCT), 2)
 
-    # Expiry: ~35 DTE
     expiry_dt = datetime.now() + timedelta(days=LONG_CALL_DTE_TARGET)
-    # Roll to nearest Friday
     days_to_friday = (4 - expiry_dt.weekday()) % 7
     expiry_dt += timedelta(days=days_to_friday)
     expiry = expiry_dt.strftime('%Y-%m-%d')
     dte    = (expiry_dt - datetime.now()).days
 
-    # Estimate premium using Black-Scholes
     iv       = estimate_iv(vixy)
     T        = dte / 365
     premium  = bs_call_price(last_price, strike, T, 0.05, iv)
     if premium <= 0:
         return None
 
-    # Position sizing: 5% of idle cash, max 5 contracts
     budget    = idle_cash * LONG_CALL_POSITION_PCT
     contracts = max(1, min(5, int(budget / (premium * 100))))
     total_cost = round(premium * contracts * 100, 2)
 
-    if total_cost > idle_cash * 0.10:   # never spend more than 10% on options
+    if total_cost > idle_cash * 0.10:
         contracts  = max(1, int(idle_cash * 0.10 / (premium * 100)))
         total_cost = round(premium * contracts * 100, 2)
 
@@ -166,7 +231,7 @@ def evaluate_long_call(
         estimated_premium=round(premium, 4),
         contracts=contracts,
         estimated_cost=total_cost,
-        reason=f"High-conviction flow signal (score={score:.3f}), IV={iv:.1%}",
+        reason=f"High-conviction flow signal (score={score:.3f}), IV~{iv:.1%} (BS estimate)",
         score=score,
     )
 
@@ -405,6 +470,7 @@ def evaluate_csp(
     vixy:       float,
     regime:     str,
     idle_cash:  float,
+    client    = None,        # PATCH: optional Schwab client for live chain
 ) -> OptionsSignal | None:
     """
     Evaluates whether to sell a cash-secured put on a high-conviction symbol.
@@ -414,13 +480,16 @@ def evaluate_csp(
       - Regime is flow or neutral — not in volatility/crisis
       - Sufficient cash to secure the put
 
-    Strike: 4% below current price (we WANT to own this stock at a discount)
-    DTE: 21 days — enough time value, not too long
+    Strike: ~30 delta (≈ 8% OTM) by default — we WANT to own this stock at a discount
+    DTE: ~35 — enough time value, not too long
 
     Two outcomes:
       1. Put expires worthless  → keep premium, re-evaluate
-      2. Assigned at strike     → own shares at 4% discount + premium
+      2. Assigned at strike     → own shares at discount + premium
                                    → immediately eligible for covered calls
+
+    If `client` is provided, fetches the live Schwab option chain and uses
+    real bid/ask/IV/delta. Logs every chain fetch to chains_live.db.
     """
     if score < CSP_MIN_SCORE:
         return None
@@ -429,28 +498,81 @@ def evaluate_csp(
         return None
 
     # IVR check — only sell puts when volatility premium is elevated
-    # High IVR (>50) = collect more premium for same risk → boost score
-    # Low IVR (<30)  = thin premium → suppress or skip CSP
     ivr = get_stock_ivr(symbol)
     if ivr < 20.0:
-        return None   # IV too compressed — not worth selling puts
-    # IVR multiplier: scales score up/down based on premium quality
-    # IVR 50 = neutral (1.0x), IVR 80 = 1.15x, IVR 20 = 0.85x
+        return None
     ivr_multiplier = 0.85 + (ivr / 100) * 0.30
     adjusted_score = round(score * ivr_multiplier, 4)
     if adjusted_score < CSP_MIN_SCORE:
-        return None   # IVR-adjusted score below threshold
-    # Volatility: allow CSPs only — premium is highest when VIX is elevated
-    # Tighter sizing: 15% budget vs 25% in normal regimes
+        return None
     if last_price <= 0 or idle_cash <= 0:
         return None
 
-    # Strike: target ~30 delta = ~8% OTM (more premium than 4%)
-    # 30-delta rule: ~30% probability of assignment = good risk/reward
+    vol_regimes = ('volatility', 'volatility-cautious', 'volatility-defensive')
+
+    # PATCH: try to fetch real chain first
+    chain = None
+    if client is not None:
+        chain = fetch_and_log_chain(client, symbol,
+                                     requested_by='evaluate_csp',
+                                     dte_min=21, dte_max=60)
+
+    if chain and chain.get('strikes'):
+        # Try to find ~30 delta put with real data
+        # find_strike picks the put with delta closest to target_delta
+        s = find_strike(chain, side='put', target_delta=CSP_DELTA_TARGET)
+        if s is None:
+            # Fallback: 8% OTM put from real chain
+            s = find_strike(chain, side='put', target_otm_pct=CSP_OTM_PCT)
+        if s and s.get('mid') and s['mid'] >= CSP_MIN_PREMIUM:
+            strike     = float(s['strike'])
+            expiry     = s['expiration']
+            dte        = int(s.get('dte') or CSP_DTE_TARGET)
+            put_px     = float(s['mid'])
+            real_iv    = s.get('iv')
+            real_delta = s.get('delta')
+
+            # Position sizing -- tighter in volatility regime
+            vol_budget  = 0.15 if regime in vol_regimes else CSP_MAX_BUDGET
+            max_budget  = idle_cash * vol_budget
+            contracts   = max(1, min(3 if regime in vol_regimes else 5,
+                                     int(max_budget / (strike * 100))))
+            cash_needed = strike * contracts * 100
+            if cash_needed > idle_cash * 0.90:
+                contracts  = max(1, int(idle_cash * 0.90 / (strike * 100)))
+                cash_needed = strike * contracts * 100
+            if contracts < 1:
+                return None
+
+            total_income  = round(put_px * contracts * 100, 2)
+            effective_buy = round(strike - put_px, 2)
+
+            extras = [f"IVR={ivr:.1f}"]
+            if real_iv is not None:    extras.append(f"IV={real_iv:.1f}")
+            if real_delta is not None: extras.append(f"delta={real_delta:.2f}")
+
+            return OptionsSignal(
+                symbol=symbol,
+                action='sell_csp',
+                strike=strike,
+                expiry=expiry,
+                estimated_premium=round(put_px, 4),
+                contracts=contracts,
+                estimated_cost=-total_income,
+                reason=(
+                    f"CSP (live chain): sell {contracts}x ${strike:.2f}P {expiry} "
+                    f"@ ${put_px:.2f} ({' '.join(extras)}) DTE={dte}  "
+                    f"Income: +${total_income:.2f}  "
+                    f"Effective buy if assigned: ${effective_buy:.2f}  "
+                    f"Cash reserved: ${cash_needed:,.2f}"
+                ),
+                score=score,
+            )
+        # Chain fetched but no usable strike -- fall through to BS estimate
+
+    # ── Fallback: BS estimate path (legacy behavior) ─────────────────────────
     strike = round(last_price * (1 - CSP_OTM_PCT), 2)
 
-    # Cash required to secure put — tighter in volatility regime
-    vol_regimes = ('volatility', 'volatility-cautious', 'volatility-defensive')
     vol_budget  = 0.15 if regime in vol_regimes else CSP_MAX_BUDGET
     max_budget  = idle_cash * vol_budget
     contracts   = max(1, min(3 if regime in vol_regimes else 5,
@@ -464,32 +586,27 @@ def evaluate_csp(
     if contracts < 1:
         return None
 
-    # Expiry: 35 DTE target (30-45 DTE sweet spot), nearest Friday
     expiry_dt = datetime.now() + timedelta(days=CSP_DTE_TARGET)
     days_to_friday = (4 - expiry_dt.weekday()) % 7
     expiry_dt += timedelta(days=days_to_friday)
     expiry = expiry_dt.strftime('%Y-%m-%d')
     dte    = (expiry_dt - datetime.now()).days
 
-    # Enforce minimum DTE
     if dte < CSP_DTE_MIN:
         expiry_dt += timedelta(days=7)
         expiry = expiry_dt.strftime('%Y-%m-%d')
         dte    = (expiry_dt - datetime.now()).days
 
-    # Estimate put premium using Black-Scholes
     iv      = estimate_iv(vixy)
     T       = dte / 365
-    # For puts: use put-call parity approximation
     call_px = bs_call_price(last_price, strike, T, 0.05, iv)
-    # Put = call + PV(strike) - stock (put-call parity)
     put_px  = max(call_px + strike * math.exp(-0.05 * T) - last_price, 0.05)
 
     if put_px < CSP_MIN_PREMIUM:
-        return None   # premium too small to be worth the assignment risk
+        return None
 
     total_income  = round(put_px * contracts * 100, 2)
-    effective_buy = round(strike - put_px, 2)   # effective cost if assigned
+    effective_buy = round(strike - put_px, 2)
 
     return OptionsSignal(
         symbol=symbol,
@@ -498,10 +615,11 @@ def evaluate_csp(
         expiry=expiry,
         estimated_premium=round(put_px, 4),
         contracts=contracts,
-        estimated_cost=-total_income,   # negative = we receive premium
+        estimated_cost=-total_income,
         reason=(
-            f"CSP: sell {contracts}x ${strike:.2f}P {expiry} "
-            f"@ ~${put_px:.2f}  Income: +${total_income:.2f}  "
+            f"CSP (BS estimate): sell {contracts}x ${strike:.2f}P {expiry} "
+            f"@ ~${put_px:.2f}  IVR={ivr:.1f}  "
+            f"Income: +${total_income:.2f}  "
             f"Effective buy if assigned: ${effective_buy:.2f}  "
             f"Cash reserved: ${cash_needed:,.2f}"
         ),
@@ -708,19 +826,19 @@ def evaluate_options(
     vixy:              float,
     regime:            str,
     options_positions: list = None,
+    client           = None,    # PATCH: pass through to evaluate_csp/evaluate_long_call
 ) -> dict:
     """
     Top-level options evaluation for the bot cycle.
     Returns dict with long_call_signals, covered_call_signals, exit_signals.
+
+    Pass `client` (the authenticated Schwab client) to enable live chain fetches.
+    If omitted (None), all evaluations use the Black-Scholes estimate path.
     """
     idle_cash    = portfolio.get('cash', 0)
     parking_pos  = {k: v for k, v in portfolio.get('positions', {}).items()
                     if k in PARKING_TICKERS}
 
-    # Score-based entry routing:
-    #   score 0.85+  → sell cash-secured put (high conviction, want to own at discount)
-    #   score 0.80-0.84 → buy equity at market (handled by main.py execute_trades)
-    #   score 0.85+ in flow regime only → also eligible for long calls
     long_call_signals = []
     csp_signals       = []
 
@@ -733,6 +851,7 @@ def evaluate_options(
         csp_signal = evaluate_csp(
             symbol=symbol, score=score, last_price=last,
             vixy=vixy, regime=regime, idle_cash=idle_cash,
+            client=client,
         )
         if csp_signal:
             csp_signals.append(csp_signal)
@@ -742,6 +861,7 @@ def evaluate_options(
         signal = evaluate_long_call(
             symbol=symbol, score=score, last_price=last,
             vixy=vixy, regime=regime, idle_cash=idle_cash,
+            client=client,
         )
         if signal:
             long_call_signals.append(signal)
@@ -937,6 +1057,7 @@ if __name__ == '__main__':
         quotes=mock_quotes,
         vixy=22.0,
         regime='flow',
+        # client=None: smoke test uses BS estimate path
     )
 
     print_options_summary(result)

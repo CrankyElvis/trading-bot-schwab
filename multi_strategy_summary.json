@@ -1,0 +1,1884 @@
+{
+  "analysis_window": {
+    "start": "2025-05-21",
+    "end": "2026-05-21"
+  },
+  "min_starting_capital": 25000.0,
+  "n_tickers": 48,
+  "tickers": [
+    "AAPL",
+    "AFRM",
+    "AMAT",
+    "AMZN",
+    "APP",
+    "ASML",
+    "AVGO",
+    "BAC",
+    "CRWD",
+    "DASH",
+    "DDOG",
+    "DIA",
+    "GDX",
+    "GOOGL",
+    "GS",
+    "IBKR",
+    "INSM",
+    "IWM",
+    "JPM",
+    "KLAC",
+    "LRCX",
+    "MEDP",
+    "META",
+    "MRVL",
+    "MSFT",
+    "MSTR",
+    "MU",
+    "NET",
+    "NFLX",
+    "NVDA",
+    "PANW",
+    "PLTR",
+    "QQQ",
+    "SCHP",
+    "SMCI",
+    "SMH",
+    "SNOW",
+    "SPY",
+    "TSLA",
+    "TSM",
+    "VIXY",
+    "VTIP",
+    "XLE",
+    "XLF",
+    "XLI",
+    "XLK",
+    "XLV",
+    "ZS"
+  ],
+  "per_ticker_metrics": {
+    "AAPL": {
+      "WHEEL": {
+        "total_return_pct": 27.62,
+        "annual_return_pct": 27.75,
+        "sharpe_ratio": 1.446,
+        "max_drawdown_pct": -10.24,
+        "final_value": 31905.5,
+        "n_trades": 8,
+        "starting_capital": 25000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 8.63,
+        "annual_return_pct": 8.67,
+        "sharpe_ratio": 0.643,
+        "max_drawdown_pct": -2.66,
+        "final_value": 27158.0,
+        "n_trades": 8,
+        "starting_capital": 25000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": -21.87,
+        "annual_return_pct": -21.95,
+        "sharpe_ratio": -0.169,
+        "max_drawdown_pct": -33.7,
+        "final_value": 19532.0,
+        "n_trades": 8,
+        "starting_capital": 25000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 50.63,
+        "annual_return_pct": 50.87,
+        "sharpe_ratio": 1.779,
+        "max_drawdown_pct": -13.77,
+        "final_value": 37656.7,
+        "n_trades": 1,
+        "starting_capital": 25000.0
+      }
+    },
+    "AFRM": {
+      "WHEEL": {
+        "total_return_pct": 2.06,
+        "annual_return_pct": 2.06,
+        "sharpe_ratio": -0.111,
+        "max_drawdown_pct": -7.78,
+        "final_value": 25514.0,
+        "n_trades": 12,
+        "starting_capital": 25000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 2.06,
+        "annual_return_pct": 2.07,
+        "sharpe_ratio": -0.211,
+        "max_drawdown_pct": -6.12,
+        "final_value": 25514.5,
+        "n_trades": 10,
+        "starting_capital": 25000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": 25.15,
+        "annual_return_pct": 25.26,
+        "sharpe_ratio": 0.588,
+        "max_drawdown_pct": -31.73,
+        "final_value": 31286.5,
+        "n_trades": 8,
+        "starting_capital": 25000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 42.19,
+        "annual_return_pct": 42.39,
+        "sharpe_ratio": 0.821,
+        "max_drawdown_pct": -53.85,
+        "final_value": 35548.26,
+        "n_trades": 1,
+        "starting_capital": 25000.0
+      }
+    },
+    "AMAT": {
+      "WHEEL": {
+        "total_return_pct": 0.14,
+        "annual_return_pct": 0.14,
+        "sharpe_ratio": -0.473,
+        "max_drawdown_pct": -6.97,
+        "final_value": 25034.0,
+        "n_trades": 8,
+        "starting_capital": 25000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 0.26,
+        "annual_return_pct": 0.26,
+        "sharpe_ratio": -0.432,
+        "max_drawdown_pct": -7.14,
+        "final_value": 25065.5,
+        "n_trades": 6,
+        "starting_capital": 25000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": 362.85,
+        "annual_return_pct": 365.69,
+        "sharpe_ratio": 1.193,
+        "max_drawdown_pct": -17.55,
+        "final_value": 115713.01,
+        "n_trades": 7,
+        "starting_capital": 25000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 163.32,
+        "annual_return_pct": 164.34,
+        "sharpe_ratio": 2.276,
+        "max_drawdown_pct": -21.59,
+        "final_value": 65830.02,
+        "n_trades": 1,
+        "starting_capital": 25000.0
+      }
+    },
+    "AMZN": {
+      "WHEEL": {
+        "total_return_pct": 16.37,
+        "annual_return_pct": 16.44,
+        "sharpe_ratio": 0.69,
+        "max_drawdown_pct": -16.25,
+        "final_value": 29092.0,
+        "n_trades": 8,
+        "starting_capital": 25000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 8.73,
+        "annual_return_pct": 8.77,
+        "sharpe_ratio": 0.67,
+        "max_drawdown_pct": -4.55,
+        "final_value": 27182.5,
+        "n_trades": 8,
+        "starting_capital": 25000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": -19.58,
+        "annual_return_pct": -19.65,
+        "sharpe_ratio": -0.129,
+        "max_drawdown_pct": -50.55,
+        "final_value": 20105.01,
+        "n_trades": 8,
+        "starting_capital": 25000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 33.4,
+        "annual_return_pct": 33.55,
+        "sharpe_ratio": 0.99,
+        "max_drawdown_pct": -21.69,
+        "final_value": 33350.16,
+        "n_trades": 1,
+        "starting_capital": 25000.0
+      }
+    },
+    "APP": {
+      "WHEEL": {
+        "total_return_pct": 8.57,
+        "annual_return_pct": 8.61,
+        "sharpe_ratio": 0.304,
+        "max_drawdown_pct": -25.76,
+        "final_value": 48857.0,
+        "n_trades": 8,
+        "starting_capital": 45000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 5.94,
+        "annual_return_pct": 5.96,
+        "sharpe_ratio": 0.2,
+        "max_drawdown_pct": -20.91,
+        "final_value": 47672.0,
+        "n_trades": 9,
+        "starting_capital": 45000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": 6.28,
+        "annual_return_pct": 6.3,
+        "sharpe_ratio": 0.215,
+        "max_drawdown_pct": -18.66,
+        "final_value": 47824.0,
+        "n_trades": 8,
+        "starting_capital": 45000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 35.43,
+        "annual_return_pct": 35.59,
+        "sharpe_ratio": 0.735,
+        "max_drawdown_pct": -49.87,
+        "final_value": 60942.5,
+        "n_trades": 1,
+        "starting_capital": 45000.0
+      }
+    },
+    "ASML": {
+      "WHEEL": {
+        "total_return_pct": 3.22,
+        "annual_return_pct": 3.23,
+        "sharpe_ratio": -0.392,
+        "max_drawdown_pct": 0.0,
+        "final_value": 77415.0,
+        "n_trades": 3,
+        "starting_capital": 75000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 3.4,
+        "annual_return_pct": 3.41,
+        "sharpe_ratio": -0.294,
+        "max_drawdown_pct": 0.0,
+        "final_value": 77550.0,
+        "n_trades": 5,
+        "starting_capital": 75000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": 88.76,
+        "annual_return_pct": 89.23,
+        "sharpe_ratio": 0.978,
+        "max_drawdown_pct": -24.61,
+        "final_value": 141567.02,
+        "n_trades": 8,
+        "starting_capital": 75000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 115.12,
+        "annual_return_pct": 115.77,
+        "sharpe_ratio": 2.011,
+        "max_drawdown_pct": -17.79,
+        "final_value": 161337.83,
+        "n_trades": 1,
+        "starting_capital": 75000.0
+      }
+    },
+    "AVGO": {
+      "WHEEL": {
+        "total_return_pct": 34.03,
+        "annual_return_pct": 34.19,
+        "sharpe_ratio": 1.047,
+        "max_drawdown_pct": -23.59,
+        "final_value": 40210.0,
+        "n_trades": 9,
+        "starting_capital": 30000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 20.54,
+        "annual_return_pct": 20.63,
+        "sharpe_ratio": 2.03,
+        "max_drawdown_pct": -1.18,
+        "final_value": 36161.0,
+        "n_trades": 10,
+        "starting_capital": 30000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": 25.64,
+        "annual_return_pct": 25.76,
+        "sharpe_ratio": 0.511,
+        "max_drawdown_pct": -35.4,
+        "final_value": 37692.5,
+        "n_trades": 8,
+        "starting_capital": 30000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 80.1,
+        "annual_return_pct": 80.52,
+        "sharpe_ratio": 1.507,
+        "max_drawdown_pct": -28.88,
+        "final_value": 54029.2,
+        "n_trades": 1,
+        "starting_capital": 30000.0
+      }
+    },
+    "BAC": {
+      "WHEEL": {
+        "total_return_pct": 3.9,
+        "annual_return_pct": 3.91,
+        "sharpe_ratio": -0.074,
+        "max_drawdown_pct": -1.71,
+        "final_value": 25974.0,
+        "n_trades": 8,
+        "starting_capital": 25000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 0.77,
+        "annual_return_pct": 0.77,
+        "sharpe_ratio": -2.316,
+        "max_drawdown_pct": -1.12,
+        "final_value": 25192.5,
+        "n_trades": 10,
+        "starting_capital": 25000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": -60.55,
+        "annual_return_pct": -60.7,
+        "sharpe_ratio": -3.193,
+        "max_drawdown_pct": -60.55,
+        "final_value": 9862.5,
+        "n_trades": 8,
+        "starting_capital": 25000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 19.05,
+        "annual_return_pct": 19.13,
+        "sharpe_ratio": 0.741,
+        "max_drawdown_pct": -18.39,
+        "final_value": 29762.72,
+        "n_trades": 1,
+        "starting_capital": 25000.0
+      }
+    },
+    "CRWD": {
+      "WHEEL": {
+        "total_return_pct": 12.59,
+        "annual_return_pct": 12.65,
+        "sharpe_ratio": 0.614,
+        "max_drawdown_pct": -9.74,
+        "final_value": 61925.5,
+        "n_trades": 11,
+        "starting_capital": 55000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 11.25,
+        "annual_return_pct": 11.29,
+        "sharpe_ratio": 1.005,
+        "max_drawdown_pct": -2.45,
+        "final_value": 61186.0,
+        "n_trades": 11,
+        "starting_capital": 55000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": 44.89,
+        "annual_return_pct": 45.1,
+        "sharpe_ratio": 0.654,
+        "max_drawdown_pct": -31.15,
+        "final_value": 79687.51,
+        "n_trades": 8,
+        "starting_capital": 55000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 48.91,
+        "annual_return_pct": 49.15,
+        "sharpe_ratio": 1.052,
+        "max_drawdown_pct": -37.06,
+        "final_value": 81899.74,
+        "n_trades": 1,
+        "starting_capital": 55000.0
+      }
+    },
+    "DASH": {
+      "WHEEL": {
+        "total_return_pct": 4.59,
+        "annual_return_pct": 4.61,
+        "sharpe_ratio": 0.119,
+        "max_drawdown_pct": -16.64,
+        "final_value": 26147.5,
+        "n_trades": 12,
+        "starting_capital": 25000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 15.76,
+        "annual_return_pct": 15.83,
+        "sharpe_ratio": 1.134,
+        "max_drawdown_pct": -4.8,
+        "final_value": 28940.5,
+        "n_trades": 13,
+        "starting_capital": 25000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": -22.23,
+        "annual_return_pct": -22.31,
+        "sharpe_ratio": -0.7,
+        "max_drawdown_pct": -30.21,
+        "final_value": 19442.0,
+        "n_trades": 7,
+        "starting_capital": 25000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": -22.2,
+        "annual_return_pct": -22.28,
+        "sharpe_ratio": -0.446,
+        "max_drawdown_pct": -47.94,
+        "final_value": 19449.0,
+        "n_trades": 1,
+        "starting_capital": 25000.0
+      }
+    },
+    "DDOG": {
+      "WHEEL": {
+        "total_return_pct": -5.77,
+        "annual_return_pct": -5.79,
+        "sharpe_ratio": -0.631,
+        "max_drawdown_pct": -14.15,
+        "final_value": 23557.5,
+        "n_trades": 11,
+        "starting_capital": 25000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": -4.59,
+        "annual_return_pct": -4.61,
+        "sharpe_ratio": -0.793,
+        "max_drawdown_pct": -13.37,
+        "final_value": 23852.5,
+        "n_trades": 10,
+        "starting_capital": 25000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": -8.55,
+        "annual_return_pct": -8.58,
+        "sharpe_ratio": -0.034,
+        "max_drawdown_pct": -35.99,
+        "final_value": 22863.5,
+        "n_trades": 7,
+        "starting_capital": 25000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 91.41,
+        "annual_return_pct": 91.91,
+        "sharpe_ratio": 1.267,
+        "max_drawdown_pct": -48.51,
+        "final_value": 47852.65,
+        "n_trades": 1,
+        "starting_capital": 25000.0
+      }
+    },
+    "DIA": {
+      "WHEEL": {
+        "total_return_pct": 4.63,
+        "annual_return_pct": 4.64,
+        "sharpe_ratio": 0.075,
+        "max_drawdown_pct": 0.0,
+        "final_value": 47081.5,
+        "n_trades": 8,
+        "starting_capital": 45000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 4.11,
+        "annual_return_pct": 4.12,
+        "sharpe_ratio": -0.206,
+        "max_drawdown_pct": 0.0,
+        "final_value": 46847.5,
+        "n_trades": 8,
+        "starting_capital": 45000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": -56.21,
+        "annual_return_pct": -56.35,
+        "sharpe_ratio": -3.019,
+        "max_drawdown_pct": -56.21,
+        "final_value": 19707.5,
+        "n_trades": 7,
+        "starting_capital": 45000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 20.06,
+        "annual_return_pct": 20.15,
+        "sharpe_ratio": 1.243,
+        "max_drawdown_pct": -10.03,
+        "final_value": 54026.52,
+        "n_trades": 1,
+        "starting_capital": 45000.0
+      }
+    },
+    "GDX": {
+      "WHEEL": {
+        "total_return_pct": 2.1,
+        "annual_return_pct": 2.1,
+        "sharpe_ratio": -0.296,
+        "max_drawdown_pct": -5.63,
+        "final_value": 25524.0,
+        "n_trades": 10,
+        "starting_capital": 25000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 3.07,
+        "annual_return_pct": 3.09,
+        "sharpe_ratio": -0.169,
+        "max_drawdown_pct": -3.81,
+        "final_value": 25768.5,
+        "n_trades": 9,
+        "starting_capital": 25000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": 94.58,
+        "annual_return_pct": 95.1,
+        "sharpe_ratio": 1.013,
+        "max_drawdown_pct": -18.71,
+        "final_value": 48645.0,
+        "n_trades": 8,
+        "starting_capital": 25000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 73.83,
+        "annual_return_pct": 74.21,
+        "sharpe_ratio": 1.368,
+        "max_drawdown_pct": -30.82,
+        "final_value": 43457.75,
+        "n_trades": 1,
+        "starting_capital": 25000.0
+      }
+    },
+    "GOOGL": {
+      "WHEEL": {
+        "total_return_pct": 8.49,
+        "annual_return_pct": 8.52,
+        "sharpe_ratio": 1.06,
+        "max_drawdown_pct": 0.0,
+        "final_value": 27122.0,
+        "n_trades": 5,
+        "starting_capital": 25000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 8.49,
+        "annual_return_pct": 8.52,
+        "sharpe_ratio": 1.06,
+        "max_drawdown_pct": 0.0,
+        "final_value": 27122.0,
+        "n_trades": 5,
+        "starting_capital": 25000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": 207.3,
+        "annual_return_pct": 208.68,
+        "sharpe_ratio": 1.199,
+        "max_drawdown_pct": -25.81,
+        "final_value": 76824.51,
+        "n_trades": 8,
+        "starting_capital": 25000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 129.71,
+        "annual_return_pct": 130.47,
+        "sharpe_ratio": 2.895,
+        "max_drawdown_pct": -20.4,
+        "final_value": 57426.8,
+        "n_trades": 1,
+        "starting_capital": 25000.0
+      }
+    },
+    "GS": {
+      "WHEEL": {
+        "total_return_pct": 3.36,
+        "annual_return_pct": 3.37,
+        "sharpe_ratio": -0.323,
+        "max_drawdown_pct": 0.0,
+        "final_value": 67184.0,
+        "n_trades": 3,
+        "starting_capital": 65000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 2.9,
+        "annual_return_pct": 2.91,
+        "sharpe_ratio": -0.538,
+        "max_drawdown_pct": 0.0,
+        "final_value": 66882.5,
+        "n_trades": 4,
+        "starting_capital": 65000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": 35.46,
+        "annual_return_pct": 35.63,
+        "sharpe_ratio": 0.608,
+        "max_drawdown_pct": -25.78,
+        "final_value": 88050.01,
+        "n_trades": 8,
+        "starting_capital": 65000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 66.19,
+        "annual_return_pct": 66.53,
+        "sharpe_ratio": 1.872,
+        "max_drawdown_pct": -19.79,
+        "final_value": 108023.39,
+        "n_trades": 1,
+        "starting_capital": 65000.0
+      }
+    },
+    "IBKR": {
+      "WHEEL": {
+        "total_return_pct": -50.63,
+        "annual_return_pct": -50.77,
+        "sharpe_ratio": -0.808,
+        "max_drawdown_pct": -57.03,
+        "final_value": 12343.0,
+        "n_trades": 11,
+        "starting_capital": 25000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 4.1,
+        "annual_return_pct": 4.11,
+        "sharpe_ratio": 0.025,
+        "max_drawdown_pct": -1.74,
+        "final_value": 26024.0,
+        "n_trades": 13,
+        "starting_capital": 25000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": -18.63,
+        "annual_return_pct": -18.69,
+        "sharpe_ratio": -0.12,
+        "max_drawdown_pct": -44.02,
+        "final_value": 20343.5,
+        "n_trades": 8,
+        "starting_capital": 25000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 63.33,
+        "annual_return_pct": 63.65,
+        "sharpe_ratio": 1.412,
+        "max_drawdown_pct": -18.78,
+        "final_value": 40833.59,
+        "n_trades": 1,
+        "starting_capital": 25000.0
+      }
+    },
+    "INSM": {
+      "WHEEL": {
+        "total_return_pct": -7.14,
+        "annual_return_pct": -7.17,
+        "sharpe_ratio": -0.641,
+        "max_drawdown_pct": -16.48,
+        "final_value": 23214.5,
+        "n_trades": 13,
+        "starting_capital": 25000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": -0.61,
+        "annual_return_pct": -0.61,
+        "sharpe_ratio": -0.322,
+        "max_drawdown_pct": -9.47,
+        "final_value": 24848.5,
+        "n_trades": 17,
+        "starting_capital": 25000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": 165.6,
+        "annual_return_pct": 166.63,
+        "sharpe_ratio": 1.398,
+        "max_drawdown_pct": -33.7,
+        "final_value": 66399.47,
+        "n_trades": 9,
+        "starting_capital": 25000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 65.79,
+        "annual_return_pct": 66.12,
+        "sharpe_ratio": 1.09,
+        "max_drawdown_pct": -52.03,
+        "final_value": 41446.78,
+        "n_trades": 1,
+        "starting_capital": 25000.0
+      }
+    },
+    "IWM": {
+      "WHEEL": {
+        "total_return_pct": 13.54,
+        "annual_return_pct": 13.6,
+        "sharpe_ratio": 1.003,
+        "max_drawdown_pct": -4.58,
+        "final_value": 28385.5,
+        "n_trades": 8,
+        "starting_capital": 25000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 7.5,
+        "annual_return_pct": 7.53,
+        "sharpe_ratio": 0.924,
+        "max_drawdown_pct": 0.0,
+        "final_value": 26875.5,
+        "n_trades": 9,
+        "starting_capital": 25000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": -41.72,
+        "annual_return_pct": -41.85,
+        "sharpe_ratio": -1.265,
+        "max_drawdown_pct": -55.03,
+        "final_value": 14569.0,
+        "n_trades": 8,
+        "starting_capital": 25000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 39.01,
+        "annual_return_pct": 39.19,
+        "sharpe_ratio": 1.607,
+        "max_drawdown_pct": -11.18,
+        "final_value": 34751.44,
+        "n_trades": 1,
+        "starting_capital": 25000.0
+      }
+    },
+    "JPM": {
+      "WHEEL": {
+        "total_return_pct": 9.36,
+        "annual_return_pct": 9.4,
+        "sharpe_ratio": 1.64,
+        "max_drawdown_pct": 0.0,
+        "final_value": 32807.0,
+        "n_trades": 8,
+        "starting_capital": 30000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 7.74,
+        "annual_return_pct": 7.77,
+        "sharpe_ratio": 1.221,
+        "max_drawdown_pct": 0.0,
+        "final_value": 32322.5,
+        "n_trades": 9,
+        "starting_capital": 30000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": -39.91,
+        "annual_return_pct": -40.03,
+        "sharpe_ratio": -1.407,
+        "max_drawdown_pct": -40.15,
+        "final_value": 18027.0,
+        "n_trades": 8,
+        "starting_capital": 30000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 15.94,
+        "annual_return_pct": 16.01,
+        "sharpe_ratio": 0.621,
+        "max_drawdown_pct": -15.37,
+        "final_value": 34783.44,
+        "n_trades": 1,
+        "starting_capital": 30000.0
+      }
+    },
+    "KLAC": {
+      "WHEEL": {
+        "total_return_pct": 5.14,
+        "annual_return_pct": 5.16,
+        "sharpe_ratio": 0.423,
+        "max_drawdown_pct": 0.0,
+        "final_value": 89370.0,
+        "n_trades": 4,
+        "starting_capital": 85000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 5.14,
+        "annual_return_pct": 5.16,
+        "sharpe_ratio": 0.423,
+        "max_drawdown_pct": 0.0,
+        "final_value": 89370.0,
+        "n_trades": 5,
+        "starting_capital": 85000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": 106.19,
+        "annual_return_pct": 106.78,
+        "sharpe_ratio": 1.111,
+        "max_drawdown_pct": -16.23,
+        "final_value": 175261.02,
+        "n_trades": 9,
+        "starting_capital": 85000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 136.34,
+        "annual_return_pct": 137.16,
+        "sharpe_ratio": 2.053,
+        "max_drawdown_pct": -22.4,
+        "final_value": 200893.17,
+        "n_trades": 1,
+        "starting_capital": 85000.0
+      }
+    },
+    "LRCX": {
+      "WHEEL": {
+        "total_return_pct": 22.46,
+        "annual_return_pct": 22.55,
+        "sharpe_ratio": 2.101,
+        "max_drawdown_pct": 0.0,
+        "final_value": 30614.0,
+        "n_trades": 9,
+        "starting_capital": 25000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 21.7,
+        "annual_return_pct": 21.8,
+        "sharpe_ratio": 1.978,
+        "max_drawdown_pct": 0.0,
+        "final_value": 30426.0,
+        "n_trades": 11,
+        "starting_capital": 25000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": 297.54,
+        "annual_return_pct": 299.73,
+        "sharpe_ratio": 1.196,
+        "max_drawdown_pct": -18.56,
+        "final_value": 99385.01,
+        "n_trades": 7,
+        "starting_capital": 25000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 264.22,
+        "annual_return_pct": 266.1,
+        "sharpe_ratio": 2.784,
+        "max_drawdown_pct": -20.08,
+        "final_value": 91054.45,
+        "n_trades": 1,
+        "starting_capital": 25000.0
+      }
+    },
+    "MEDP": {
+      "WHEEL": {
+        "total_return_pct": 5.39,
+        "annual_return_pct": 5.41,
+        "sharpe_ratio": 0.376,
+        "max_drawdown_pct": 0.0,
+        "final_value": 31617.5,
+        "n_trades": 3,
+        "starting_capital": 30000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 3.84,
+        "annual_return_pct": 3.86,
+        "sharpe_ratio": -0.049,
+        "max_drawdown_pct": -0.16,
+        "final_value": 31152.5,
+        "n_trades": 3,
+        "starting_capital": 30000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": 18.06,
+        "annual_return_pct": 18.14,
+        "sharpe_ratio": 0.44,
+        "max_drawdown_pct": -29.74,
+        "final_value": 35419.01,
+        "n_trades": 8,
+        "starting_capital": 30000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 45.22,
+        "annual_return_pct": 45.44,
+        "sharpe_ratio": 0.782,
+        "max_drawdown_pct": -36.53,
+        "final_value": 43567.33,
+        "n_trades": 1,
+        "starting_capital": 30000.0
+      }
+    },
+    "META": {
+      "WHEEL": {
+        "total_return_pct": 2.71,
+        "annual_return_pct": 2.72,
+        "sharpe_ratio": 0.024,
+        "max_drawdown_pct": -19.66,
+        "final_value": 66764.0,
+        "n_trades": 9,
+        "starting_capital": 65000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 11.21,
+        "annual_return_pct": 11.26,
+        "sharpe_ratio": 1.117,
+        "max_drawdown_pct": -2.31,
+        "final_value": 72286.0,
+        "n_trades": 7,
+        "starting_capital": 65000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": -45.99,
+        "annual_return_pct": -46.12,
+        "sharpe_ratio": -2.927,
+        "max_drawdown_pct": -45.99,
+        "final_value": 35107.51,
+        "n_trades": 7,
+        "starting_capital": 65000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": -4.41,
+        "annual_return_pct": -4.43,
+        "sharpe_ratio": -0.074,
+        "max_drawdown_pct": -33.38,
+        "final_value": 62131.76,
+        "n_trades": 1,
+        "starting_capital": 65000.0
+      }
+    },
+    "MRVL": {
+      "WHEEL": {
+        "total_return_pct": 12.13,
+        "annual_return_pct": 12.18,
+        "sharpe_ratio": 1.173,
+        "max_drawdown_pct": -2.74,
+        "final_value": 28033.0,
+        "n_trades": 11,
+        "starting_capital": 25000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 12.94,
+        "annual_return_pct": 13.0,
+        "sharpe_ratio": 1.756,
+        "max_drawdown_pct": 0.0,
+        "final_value": 28235.5,
+        "n_trades": 10,
+        "starting_capital": 25000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": 385.87,
+        "annual_return_pct": 388.94,
+        "sharpe_ratio": 1.357,
+        "max_drawdown_pct": -18.15,
+        "final_value": 121468.0,
+        "n_trades": 8,
+        "starting_capital": 25000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 216.76,
+        "annual_return_pct": 218.22,
+        "sharpe_ratio": 2.208,
+        "max_drawdown_pct": -26.38,
+        "final_value": 79190.7,
+        "n_trades": 1,
+        "starting_capital": 25000.0
+      }
+    },
+    "MSFT": {
+      "WHEEL": {
+        "total_return_pct": -1.56,
+        "annual_return_pct": -1.56,
+        "sharpe_ratio": -0.716,
+        "max_drawdown_pct": -8.78,
+        "final_value": 49222.0,
+        "n_trades": 10,
+        "starting_capital": 50000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": -3.33,
+        "annual_return_pct": -3.34,
+        "sharpe_ratio": -0.585,
+        "max_drawdown_pct": -10.41,
+        "final_value": 48336.0,
+        "n_trades": 10,
+        "starting_capital": 50000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": -14.03,
+        "annual_return_pct": -14.08,
+        "sharpe_ratio": -0.138,
+        "max_drawdown_pct": -44.74,
+        "final_value": 42984.48,
+        "n_trades": 8,
+        "starting_capital": 50000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": -7.37,
+        "annual_return_pct": -7.39,
+        "sharpe_ratio": -0.374,
+        "max_drawdown_pct": -34.06,
+        "final_value": 46317.2,
+        "n_trades": 1,
+        "starting_capital": 50000.0
+      }
+    },
+    "MSTR": {
+      "WHEEL": {
+        "total_return_pct": -13.34,
+        "annual_return_pct": -13.39,
+        "sharpe_ratio": -0.644,
+        "max_drawdown_pct": -31.59,
+        "final_value": 34664.5,
+        "n_trades": 15,
+        "starting_capital": 40000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": -14.59,
+        "annual_return_pct": -14.64,
+        "sharpe_ratio": -0.649,
+        "max_drawdown_pct": -24.96,
+        "final_value": 34164.5,
+        "n_trades": 9,
+        "starting_capital": 40000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": -25.84,
+        "annual_return_pct": -25.93,
+        "sharpe_ratio": -0.875,
+        "max_drawdown_pct": -41.32,
+        "final_value": 29663.5,
+        "n_trades": 8,
+        "starting_capital": 40000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": -58.87,
+        "annual_return_pct": -59.01,
+        "sharpe_ratio": -1.011,
+        "max_drawdown_pct": -76.31,
+        "final_value": 16453.84,
+        "n_trades": 1,
+        "starting_capital": 40000.0
+      }
+    },
+    "MU": {
+      "WHEEL": {
+        "total_return_pct": 14.16,
+        "annual_return_pct": 14.22,
+        "sharpe_ratio": 1.503,
+        "max_drawdown_pct": 0.0,
+        "final_value": 28539.5,
+        "n_trades": 6,
+        "starting_capital": 25000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 13.26,
+        "annual_return_pct": 13.32,
+        "sharpe_ratio": 1.379,
+        "max_drawdown_pct": 0.0,
+        "final_value": 28315.5,
+        "n_trades": 6,
+        "starting_capital": 25000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": 733.79,
+        "annual_return_pct": 740.87,
+        "sharpe_ratio": 1.579,
+        "max_drawdown_pct": -10.73,
+        "final_value": 208448.5,
+        "n_trades": 8,
+        "starting_capital": 25000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 692.91,
+        "annual_return_pct": 699.48,
+        "sharpe_ratio": 3.55,
+        "max_drawdown_pct": -30.29,
+        "final_value": 198227.59,
+        "n_trades": 1,
+        "starting_capital": 25000.0
+      }
+    },
+    "NET": {
+      "WHEEL": {
+        "total_return_pct": 29.24,
+        "annual_return_pct": 29.37,
+        "sharpe_ratio": 0.807,
+        "max_drawdown_pct": -19.06,
+        "final_value": 32309.5,
+        "n_trades": 10,
+        "starting_capital": 25000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 19.61,
+        "annual_return_pct": 19.7,
+        "sharpe_ratio": 1.844,
+        "max_drawdown_pct": -0.82,
+        "final_value": 29903.5,
+        "n_trades": 14,
+        "starting_capital": 25000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": -20.99,
+        "annual_return_pct": -21.06,
+        "sharpe_ratio": -0.518,
+        "max_drawdown_pct": -35.01,
+        "final_value": 19753.0,
+        "n_trades": 8,
+        "starting_capital": 25000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 35.7,
+        "annual_return_pct": 35.86,
+        "sharpe_ratio": 0.762,
+        "max_drawdown_pct": -36.66,
+        "final_value": 33924.67,
+        "n_trades": 1,
+        "starting_capital": 25000.0
+      }
+    },
+    "NFLX": {
+      "WHEEL": {
+        "total_return_pct": -74.51,
+        "annual_return_pct": -74.65,
+        "sharpe_ratio": -1.023,
+        "max_drawdown_pct": -75.56,
+        "final_value": 33131.0,
+        "n_trades": 9,
+        "starting_capital": 130000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": -77.11,
+        "annual_return_pct": -77.24,
+        "sharpe_ratio": -1.036,
+        "max_drawdown_pct": -77.64,
+        "final_value": 29759.5,
+        "n_trades": 6,
+        "starting_capital": 130000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": -52.86,
+        "annual_return_pct": -53.01,
+        "sharpe_ratio": -2.758,
+        "max_drawdown_pct": -52.86,
+        "final_value": 61276.49,
+        "n_trades": 7,
+        "starting_capital": 130000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": -25.24,
+        "annual_return_pct": -25.33,
+        "sharpe_ratio": -0.835,
+        "max_drawdown_pct": -43.34,
+        "final_value": 97182.66,
+        "n_trades": 1,
+        "starting_capital": 130000.0
+      }
+    },
+    "NVDA": {
+      "WHEEL": {
+        "total_return_pct": 22.36,
+        "annual_return_pct": 22.46,
+        "sharpe_ratio": 1.023,
+        "max_drawdown_pct": -14.08,
+        "final_value": 30590.0,
+        "n_trades": 8,
+        "starting_capital": 25000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 14.2,
+        "annual_return_pct": 14.26,
+        "sharpe_ratio": 1.986,
+        "max_drawdown_pct": 0.0,
+        "final_value": 28550.0,
+        "n_trades": 8,
+        "starting_capital": 25000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": 30.23,
+        "annual_return_pct": 30.37,
+        "sharpe_ratio": 0.57,
+        "max_drawdown_pct": -41.26,
+        "final_value": 32557.0,
+        "n_trades": 8,
+        "starting_capital": 25000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 66.31,
+        "annual_return_pct": 66.65,
+        "sharpe_ratio": 1.563,
+        "max_drawdown_pct": -20.18,
+        "final_value": 41577.19,
+        "n_trades": 1,
+        "starting_capital": 25000.0
+      }
+    },
+    "PANW": {
+      "WHEEL": {
+        "total_return_pct": 3.58,
+        "annual_return_pct": 3.6,
+        "sharpe_ratio": -0.064,
+        "max_drawdown_pct": -5.68,
+        "final_value": 25895.5,
+        "n_trades": 11,
+        "starting_capital": 25000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 9.85,
+        "annual_return_pct": 9.89,
+        "sharpe_ratio": 1.502,
+        "max_drawdown_pct": 0.0,
+        "final_value": 27462.0,
+        "n_trades": 11,
+        "starting_capital": 25000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": 22.89,
+        "annual_return_pct": 22.99,
+        "sharpe_ratio": 0.51,
+        "max_drawdown_pct": -49.46,
+        "final_value": 30722.0,
+        "n_trades": 8,
+        "starting_capital": 25000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 39.27,
+        "annual_return_pct": 39.45,
+        "sharpe_ratio": 0.997,
+        "max_drawdown_pct": -35.81,
+        "final_value": 34817.42,
+        "n_trades": 1,
+        "starting_capital": 25000.0
+      }
+    },
+    "PLTR": {
+      "WHEEL": {
+        "total_return_pct": 8.97,
+        "annual_return_pct": 9.01,
+        "sharpe_ratio": 0.414,
+        "max_drawdown_pct": -11.58,
+        "final_value": 27242.0,
+        "n_trades": 10,
+        "starting_capital": 25000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 7.33,
+        "annual_return_pct": 7.36,
+        "sharpe_ratio": 0.3,
+        "max_drawdown_pct": -11.74,
+        "final_value": 26832.0,
+        "n_trades": 9,
+        "starting_capital": 25000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": -33.25,
+        "annual_return_pct": -33.36,
+        "sharpe_ratio": -1.633,
+        "max_drawdown_pct": -35.68,
+        "final_value": 16687.0,
+        "n_trades": 8,
+        "starting_capital": 25000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 13.94,
+        "annual_return_pct": 14.0,
+        "sharpe_ratio": 0.434,
+        "max_drawdown_pct": -38.15,
+        "final_value": 28484.84,
+        "n_trades": 1,
+        "starting_capital": 25000.0
+      }
+    },
+    "QQQ": {
+      "WHEEL": {
+        "total_return_pct": 6.3,
+        "annual_return_pct": 6.33,
+        "sharpe_ratio": 0.662,
+        "max_drawdown_pct": 0.0,
+        "final_value": 58466.5,
+        "n_trades": 8,
+        "starting_capital": 55000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 6.3,
+        "annual_return_pct": 6.33,
+        "sharpe_ratio": 0.662,
+        "max_drawdown_pct": 0.0,
+        "final_value": 58466.5,
+        "n_trades": 8,
+        "starting_capital": 55000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": 84.69,
+        "annual_return_pct": 85.14,
+        "sharpe_ratio": 0.738,
+        "max_drawdown_pct": -51.58,
+        "final_value": 101578.49,
+        "n_trades": 8,
+        "starting_capital": 55000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 39.2,
+        "annual_return_pct": 39.38,
+        "sharpe_ratio": 1.903,
+        "max_drawdown_pct": -12.17,
+        "final_value": 76557.29,
+        "n_trades": 1,
+        "starting_capital": 55000.0
+      }
+    },
+    "SCHP": {
+      "WHEEL": {
+        "total_return_pct": 0.11,
+        "annual_return_pct": 0.11,
+        "sharpe_ratio": -11.804,
+        "max_drawdown_pct": -0.22,
+        "final_value": 25027.0,
+        "n_trades": 6,
+        "starting_capital": 25000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 0.24,
+        "annual_return_pct": 0.24,
+        "sharpe_ratio": -11.703,
+        "max_drawdown_pct": -0.22,
+        "final_value": 25061.0,
+        "n_trades": 8,
+        "starting_capital": 25000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": -52.12,
+        "annual_return_pct": -52.26,
+        "sharpe_ratio": -2.836,
+        "max_drawdown_pct": -52.12,
+        "final_value": 11970.0,
+        "n_trades": 6,
+        "starting_capital": 25000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 1.52,
+        "annual_return_pct": 1.53,
+        "sharpe_ratio": -0.661,
+        "max_drawdown_pct": -2.65,
+        "final_value": 25381.2,
+        "n_trades": 1,
+        "starting_capital": 25000.0
+      }
+    },
+    "SMCI": {
+      "WHEEL": {
+        "total_return_pct": -2.09,
+        "annual_return_pct": -2.1,
+        "sharpe_ratio": -0.908,
+        "max_drawdown_pct": -7.17,
+        "final_value": 24477.5,
+        "n_trades": 13,
+        "starting_capital": 25000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 2.59,
+        "annual_return_pct": 2.6,
+        "sharpe_ratio": -0.335,
+        "max_drawdown_pct": -3.06,
+        "final_value": 25648.5,
+        "n_trades": 10,
+        "starting_capital": 25000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": -2.14,
+        "annual_return_pct": -2.15,
+        "sharpe_ratio": 0.085,
+        "max_drawdown_pct": -33.49,
+        "final_value": 24465.0,
+        "n_trades": 8,
+        "starting_capital": 25000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": -19.66,
+        "annual_return_pct": -19.73,
+        "sharpe_ratio": 0.065,
+        "max_drawdown_pct": -66.17,
+        "final_value": 20086.0,
+        "n_trades": 1,
+        "starting_capital": 25000.0
+      }
+    },
+    "SMH": {
+      "WHEEL": {
+        "total_return_pct": 1.01,
+        "annual_return_pct": 1.02,
+        "sharpe_ratio": -2.943,
+        "max_drawdown_pct": 0.0,
+        "final_value": 25253.0,
+        "n_trades": 1,
+        "starting_capital": 25000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 1.01,
+        "annual_return_pct": 1.02,
+        "sharpe_ratio": -2.943,
+        "max_drawdown_pct": 0.0,
+        "final_value": 25253.0,
+        "n_trades": 1,
+        "starting_capital": 25000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": 137.77,
+        "annual_return_pct": 138.6,
+        "sharpe_ratio": 0.997,
+        "max_drawdown_pct": -21.73,
+        "final_value": 59443.5,
+        "n_trades": 8,
+        "starting_capital": 25000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 134.48,
+        "annual_return_pct": 135.28,
+        "sharpe_ratio": 2.852,
+        "max_drawdown_pct": -14.89,
+        "final_value": 58620.23,
+        "n_trades": 1,
+        "starting_capital": 25000.0
+      }
+    },
+    "SNOW": {
+      "WHEEL": {
+        "total_return_pct": -5.42,
+        "annual_return_pct": -5.44,
+        "sharpe_ratio": -0.597,
+        "max_drawdown_pct": -17.95,
+        "final_value": 23645.5,
+        "n_trades": 11,
+        "starting_capital": 25000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 9.72,
+        "annual_return_pct": 9.76,
+        "sharpe_ratio": 0.65,
+        "max_drawdown_pct": -6.38,
+        "final_value": 27430.5,
+        "n_trades": 11,
+        "starting_capital": 25000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": -45.76,
+        "annual_return_pct": -45.89,
+        "sharpe_ratio": -3.104,
+        "max_drawdown_pct": -45.76,
+        "final_value": 13559.5,
+        "n_trades": 8,
+        "starting_capital": 25000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": -7.55,
+        "annual_return_pct": -7.58,
+        "sharpe_ratio": 0.039,
+        "max_drawdown_pct": -56.15,
+        "final_value": 23112.38,
+        "n_trades": 1,
+        "starting_capital": 25000.0
+      }
+    },
+    "SPY": {
+      "WHEEL": {
+        "total_return_pct": 4.03,
+        "annual_return_pct": 4.05,
+        "sharpe_ratio": -0.36,
+        "max_drawdown_pct": 0.0,
+        "final_value": 62417.5,
+        "n_trades": 6,
+        "starting_capital": 60000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 2.78,
+        "annual_return_pct": 2.79,
+        "sharpe_ratio": -0.965,
+        "max_drawdown_pct": -0.56,
+        "final_value": 61669.5,
+        "n_trades": 6,
+        "starting_capital": 60000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": 78.62,
+        "annual_return_pct": 79.03,
+        "sharpe_ratio": 0.73,
+        "max_drawdown_pct": -56.41,
+        "final_value": 107172.46,
+        "n_trades": 8,
+        "starting_capital": 60000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 27.18,
+        "annual_return_pct": 27.3,
+        "sharpe_ratio": 1.745,
+        "max_drawdown_pct": -9.06,
+        "final_value": 76305.72,
+        "n_trades": 1,
+        "starting_capital": 60000.0
+      }
+    },
+    "TSLA": {
+      "WHEEL": {
+        "total_return_pct": 38.49,
+        "annual_return_pct": 38.67,
+        "sharpe_ratio": 1.246,
+        "max_drawdown_pct": -14.23,
+        "final_value": 55395.0,
+        "n_trades": 8,
+        "starting_capital": 40000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 14.88,
+        "annual_return_pct": 14.94,
+        "sharpe_ratio": 0.858,
+        "max_drawdown_pct": -7.18,
+        "final_value": 45950.0,
+        "n_trades": 8,
+        "starting_capital": 40000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": -4.6,
+        "annual_return_pct": -4.62,
+        "sharpe_ratio": 0.001,
+        "max_drawdown_pct": -22.4,
+        "final_value": 38159.0,
+        "n_trades": 8,
+        "starting_capital": 40000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 24.76,
+        "annual_return_pct": 24.87,
+        "sharpe_ratio": 0.625,
+        "max_drawdown_pct": -29.84,
+        "final_value": 49904.37,
+        "n_trades": 1,
+        "starting_capital": 40000.0
+      }
+    },
+    "TSM": {
+      "WHEEL": {
+        "total_return_pct": 8.77,
+        "annual_return_pct": 8.8,
+        "sharpe_ratio": 1.266,
+        "max_drawdown_pct": 0.0,
+        "final_value": 27192.0,
+        "n_trades": 6,
+        "starting_capital": 25000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 8.77,
+        "annual_return_pct": 8.8,
+        "sharpe_ratio": 1.266,
+        "max_drawdown_pct": 0.0,
+        "final_value": 27192.0,
+        "n_trades": 6,
+        "starting_capital": 25000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": 290.24,
+        "annual_return_pct": 292.36,
+        "sharpe_ratio": 1.383,
+        "max_drawdown_pct": -9.95,
+        "final_value": 97559.48,
+        "n_trades": 8,
+        "starting_capital": 25000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 112.0,
+        "annual_return_pct": 112.64,
+        "sharpe_ratio": 2.196,
+        "max_drawdown_pct": -18.35,
+        "final_value": 53000.7,
+        "n_trades": 1,
+        "starting_capital": 25000.0
+      }
+    },
+    "VIXY": {
+      "WHEEL": {
+        "total_return_pct": -1.65,
+        "annual_return_pct": -1.66,
+        "sharpe_ratio": -0.972,
+        "max_drawdown_pct": -4.05,
+        "final_value": 24587.5,
+        "n_trades": 12,
+        "starting_capital": 25000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 3.56,
+        "annual_return_pct": 3.58,
+        "sharpe_ratio": -0.195,
+        "max_drawdown_pct": -0.8,
+        "final_value": 25890.5,
+        "n_trades": 12,
+        "starting_capital": 25000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": -60.44,
+        "annual_return_pct": -60.59,
+        "sharpe_ratio": -3.33,
+        "max_drawdown_pct": -60.44,
+        "final_value": 9889.5,
+        "n_trades": 9,
+        "starting_capital": 25000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": -53.35,
+        "annual_return_pct": -53.5,
+        "sharpe_ratio": -1.132,
+        "max_drawdown_pct": -56.42,
+        "final_value": 11661.46,
+        "n_trades": 1,
+        "starting_capital": 25000.0
+      }
+    },
+    "VTIP": {
+      "WHEEL": {
+        "total_return_pct": 0.32,
+        "annual_return_pct": 0.32,
+        "sharpe_ratio": -15.012,
+        "max_drawdown_pct": 0.0,
+        "final_value": 25080.0,
+        "n_trades": 4,
+        "starting_capital": 25000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 0.28,
+        "annual_return_pct": 0.28,
+        "sharpe_ratio": -15.37,
+        "max_drawdown_pct": 0.0,
+        "final_value": 25070.0,
+        "n_trades": 5,
+        "starting_capital": 25000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": -47.25,
+        "annual_return_pct": -47.38,
+        "sharpe_ratio": -2.738,
+        "max_drawdown_pct": -47.72,
+        "final_value": 13187.5,
+        "n_trades": 7,
+        "starting_capital": 25000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 0.8,
+        "annual_return_pct": 0.8,
+        "sharpe_ratio": -1.252,
+        "max_drawdown_pct": -2.68,
+        "final_value": 25200.4,
+        "n_trades": 1,
+        "starting_capital": 25000.0
+      }
+    },
+    "XLE": {
+      "WHEEL": {
+        "total_return_pct": -53.62,
+        "annual_return_pct": -53.76,
+        "sharpe_ratio": -1.991,
+        "max_drawdown_pct": -54.58,
+        "final_value": 11595.5,
+        "n_trades": 12,
+        "starting_capital": 25000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": -40.93,
+        "annual_return_pct": -41.05,
+        "sharpe_ratio": -1.763,
+        "max_drawdown_pct": -42.31,
+        "final_value": 14767.5,
+        "n_trades": 10,
+        "starting_capital": 25000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": -5.13,
+        "annual_return_pct": -5.15,
+        "sharpe_ratio": 0.286,
+        "max_drawdown_pct": -46.22,
+        "final_value": 23717.99,
+        "n_trades": 7,
+        "starting_capital": 25000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 44.1,
+        "annual_return_pct": 44.31,
+        "sharpe_ratio": 1.709,
+        "max_drawdown_pct": -12.05,
+        "final_value": 36025.94,
+        "n_trades": 1,
+        "starting_capital": 25000.0
+      }
+    },
+    "XLF": {
+      "WHEEL": {
+        "total_return_pct": 0.86,
+        "annual_return_pct": 0.87,
+        "sharpe_ratio": -2.187,
+        "max_drawdown_pct": -1.58,
+        "final_value": 25216.0,
+        "n_trades": 7,
+        "starting_capital": 25000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 0.53,
+        "annual_return_pct": 0.53,
+        "sharpe_ratio": -6.436,
+        "max_drawdown_pct": -0.37,
+        "final_value": 25132.0,
+        "n_trades": 10,
+        "starting_capital": 25000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": -56.83,
+        "annual_return_pct": -56.97,
+        "sharpe_ratio": -3.018,
+        "max_drawdown_pct": -56.83,
+        "final_value": 10793.0,
+        "n_trades": 7,
+        "starting_capital": 25000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 2.86,
+        "annual_return_pct": 2.87,
+        "sharpe_ratio": -0.009,
+        "max_drawdown_pct": -15.23,
+        "final_value": 25715.68,
+        "n_trades": 1,
+        "starting_capital": 25000.0
+      }
+    },
+    "XLI": {
+      "WHEEL": {
+        "total_return_pct": 5.56,
+        "annual_return_pct": 5.58,
+        "sharpe_ratio": 0.698,
+        "max_drawdown_pct": 0.0,
+        "final_value": 26390.0,
+        "n_trades": 7,
+        "starting_capital": 25000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 3.37,
+        "annual_return_pct": 3.38,
+        "sharpe_ratio": -0.398,
+        "max_drawdown_pct": 0.0,
+        "final_value": 25841.5,
+        "n_trades": 8,
+        "starting_capital": 25000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": -31.51,
+        "annual_return_pct": -31.62,
+        "sharpe_ratio": -0.942,
+        "max_drawdown_pct": -39.74,
+        "final_value": 17121.99,
+        "n_trades": 7,
+        "starting_capital": 25000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 20.56,
+        "annual_return_pct": 20.65,
+        "sharpe_ratio": 1.044,
+        "max_drawdown_pct": -12.41,
+        "final_value": 30140.96,
+        "n_trades": 1,
+        "starting_capital": 25000.0
+      }
+    },
+    "XLK": {
+      "WHEEL": {
+        "total_return_pct": -29.9,
+        "annual_return_pct": -30.0,
+        "sharpe_ratio": -0.986,
+        "max_drawdown_pct": -33.54,
+        "final_value": 17526.0,
+        "n_trades": 5,
+        "starting_capital": 25000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": -29.9,
+        "annual_return_pct": -30.0,
+        "sharpe_ratio": -0.986,
+        "max_drawdown_pct": -33.54,
+        "final_value": 17526.0,
+        "n_trades": 4,
+        "starting_capital": 25000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": -9.41,
+        "annual_return_pct": -9.45,
+        "sharpe_ratio": 0.167,
+        "max_drawdown_pct": -47.54,
+        "final_value": 22647.5,
+        "n_trades": 7,
+        "starting_capital": 25000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 55.77,
+        "annual_return_pct": 56.05,
+        "sharpe_ratio": 2.077,
+        "max_drawdown_pct": -16.15,
+        "final_value": 38943.28,
+        "n_trades": 1,
+        "starting_capital": 25000.0
+      }
+    },
+    "XLV": {
+      "WHEEL": {
+        "total_return_pct": 3.11,
+        "annual_return_pct": 3.12,
+        "sharpe_ratio": -0.709,
+        "max_drawdown_pct": 0.0,
+        "final_value": 25778.0,
+        "n_trades": 7,
+        "starting_capital": 25000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 4.59,
+        "annual_return_pct": 4.61,
+        "sharpe_ratio": 0.276,
+        "max_drawdown_pct": 0.0,
+        "final_value": 26148.0,
+        "n_trades": 15,
+        "starting_capital": 25000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": -55.37,
+        "annual_return_pct": -55.52,
+        "sharpe_ratio": -3.021,
+        "max_drawdown_pct": -55.37,
+        "final_value": 11156.5,
+        "n_trades": 7,
+        "starting_capital": 25000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": 12.53,
+        "annual_return_pct": 12.58,
+        "sharpe_ratio": 0.614,
+        "max_drawdown_pct": -10.79,
+        "final_value": 28131.73,
+        "n_trades": 1,
+        "starting_capital": 25000.0
+      }
+    },
+    "ZS": {
+      "WHEEL": {
+        "total_return_pct": -11.06,
+        "annual_return_pct": -11.1,
+        "sharpe_ratio": -0.371,
+        "max_drawdown_pct": -33.36,
+        "final_value": 26681.5,
+        "n_trades": 13,
+        "starting_capital": 30000.0
+      },
+      "PURE_CSP": {
+        "total_return_pct": 4.85,
+        "annual_return_pct": 4.87,
+        "sharpe_ratio": 0.13,
+        "max_drawdown_pct": -6.92,
+        "final_value": 31456.0,
+        "n_trades": 13,
+        "starting_capital": 30000.0
+      },
+      "LONG_CALL": {
+        "total_return_pct": -35.82,
+        "annual_return_pct": -35.93,
+        "sharpe_ratio": -2.012,
+        "max_drawdown_pct": -40.3,
+        "final_value": 19254.0,
+        "n_trades": 8,
+        "starting_capital": 30000.0
+      },
+      "BUY_HOLD": {
+        "total_return_pct": -31.08,
+        "annual_return_pct": -31.19,
+        "sharpe_ratio": -0.639,
+        "max_drawdown_pct": -64.65,
+        "final_value": 20674.8,
+        "n_trades": 1,
+        "starting_capital": 30000.0
+      }
+    }
+  }
+}

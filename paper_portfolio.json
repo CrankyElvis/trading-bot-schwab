@@ -1,0 +1,11 @@
+{
+  "cash": 25000.0,
+  "starting_cash": 25000.0,
+  "positions": {},
+  "orders": [],
+  "trade_log": [],
+  "total_fees_paid": 0.0,
+  "total_spread_cost": 0.0,
+  "created": "2026-05-19T00:00:00",
+  "last_updated": "2026-05-19T00:00:00"
+}

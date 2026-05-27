@@ -13,6 +13,9 @@ Fetches all market data needed by the trading bot:
 
 import os
 import time
+import json
+import sqlite3
+from typing import Optional
 
 def _retry(fn, *args, attempts=3, **kwargs):
     """Retry a Schwab API call with exponential backoff on failure."""
@@ -37,6 +40,15 @@ UW_API_KEY         = os.getenv('UW_API_KEY')
 UW_BASE_URL        = 'https://api.unusualwhales.com/api'
 AV_BASE            = 'https://www.alphavantage.co/query'
 FH_BASE            = 'https://finnhub.io/api/v1'
+
+# ── SEC EDGAR Configuration ───────────────────────────────────────────────────
+# SEC requires a real contact email in the User-Agent header per their fair-access
+# policy. Placeholder emails get silently rate-limited or rejected.
+# Format: "<identifier> <real-email>". SEC will email this address before blocking
+# the IP if your traffic causes problems. Hard rate limit: 10 req/sec per IP.
+SEC_USER_AGENT = 'CrankyElvis Trading Bot ben.bissette@gmail.com'
+SEC_HEADERS    = {'User-Agent': SEC_USER_AGENT, 'Accept-Encoding': 'gzip, deflate'}
+SEC_RATE_DELAY = 0.12   # 0.12s = ~8 req/sec, safely under SEC's 10/sec cap
 
 # ── Universe ──────────────────────────────────────────────────────────────────
 # DEFAULT_UNIVERSE used for intraday snapshot (parking tickers + core ETFs)
@@ -628,54 +640,400 @@ def get_vix_term_structure() -> dict:
 
 
 # ── SEC EDGAR Form 4 (Insider Buying) ─────────────────────────────────────────
+# Implementation notes (2026-05-27):
+#   Earlier versions hit the full-text search endpoint at efts.sec.gov, which
+#   returned 0 hits because Form 4 filings don't contain the ticker symbol in
+#   document text — they reference companies by name/CIK. Switched to the
+#   submissions API + per-filing XML parsing for ground-truth transaction
+#   codes.
+#
+# Pipeline per ticker:
+#   1. Look up CIK from cached ticker→CIK map (refreshed weekly)
+#   2. Fetch data.sec.gov/submissions/CIK{cik}.json (per-day cached)
+#   3. Filter recent filings to Form 4 within lookback window
+#   4. For each Form 4, fetch primary_doc.xml (cached forever by accession)
+#   5. Parse transaction codes: P=buy, S=sell. Everything else (A, M, F, G, C)
+#      is ignored — those are grants/exercises/tax-withholding, not real-money
+#      trades.
+#
+# Rate budget: SEC allows 10 req/sec. We sleep SEC_RATE_DELAY=0.12s between
+# every SEC call. A 42-symbol cycle with ~5 filings/ticker = ~250 calls = ~30s
+# worst case, but the accession-level XML cache means after first cycle of the
+# day, subsequent cycles only pay for submissions lookups (~6s) and any new
+# filings since.
+
+SEC_TICKER_CIK_CACHE   = '/root/trading-bot/data/sec_ticker_cik.json'
+SEC_TICKER_CIK_TTL_SEC = 7 * 24 * 3600   # refresh weekly
+SEC_FILINGS_CACHE_DB   = '/root/trading-bot/data/sec_filings_cache.db'
+SEC_SUBMISSIONS_TTL    = 4 * 3600         # 4 hours — same-day cycles reuse
+# Transaction codes that count as real-money trades. P=Purchase, S=Sale.
+# A=Award/grant (RSU vesting, option grants — compensation, not a buy).
+# M=Exercise (option → stock conversion, not new commitment).
+# F=Tax withholding on vest. G=Gift. C=Conversion. I/J=Other.
+SEC_BUY_CODES  = {'P'}
+SEC_SELL_CODES = {'S'}
+
+# In-memory cache of ticker→CIK loaded from disk on first use
+_SEC_TICKER_CIK_MAP: Optional[dict] = None
+
+
+def _sec_init_cache_db():
+    """Create the per-accession XML transaction cache. Idempotent."""
+    import os
+    os.makedirs(os.path.dirname(SEC_FILINGS_CACHE_DB), exist_ok=True)
+    conn = sqlite3.connect(SEC_FILINGS_CACHE_DB, timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL")
+    # accession_number is unique per filing; once we parse it, never re-parse.
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS form4_transactions (
+            accession_number TEXT PRIMARY KEY,
+            cik              TEXT,
+            symbol           TEXT,
+            filing_date      TEXT,
+            buy_count        INTEGER,
+            sell_count       INTEGER,
+            transactions_json TEXT,
+            parsed_at        TEXT NOT NULL
+        )
+    ''')
+    # submissions response cache per ticker — short TTL since new filings appear
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS submissions_cache (
+            symbol      TEXT PRIMARY KEY,
+            cik         TEXT,
+            fetched_at  TEXT NOT NULL,
+            response_json TEXT NOT NULL
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+
+def _sec_load_ticker_cik_map() -> dict:
+    """
+    Returns the ticker→CIK mapping. Lazy-loaded from disk cache, refetched
+    from SEC if file is missing or older than SEC_TICKER_CIK_TTL_SEC.
+    """
+    import os
+    global _SEC_TICKER_CIK_MAP
+    if _SEC_TICKER_CIK_MAP is not None:
+        return _SEC_TICKER_CIK_MAP
+
+    # Check disk cache freshness
+    needs_refresh = True
+    if os.path.exists(SEC_TICKER_CIK_CACHE):
+        age = time.time() - os.path.getmtime(SEC_TICKER_CIK_CACHE)
+        if age < SEC_TICKER_CIK_TTL_SEC:
+            needs_refresh = False
+
+    if needs_refresh:
+        try:
+            print('  [SEC] Refreshing ticker→CIK map from SEC...')
+            os.makedirs(os.path.dirname(SEC_TICKER_CIK_CACHE), exist_ok=True)
+            r = requests.get(
+                'https://www.sec.gov/files/company_tickers.json',
+                headers=SEC_HEADERS, timeout=20,
+            )
+            time.sleep(SEC_RATE_DELAY)
+            if r.status_code == 200:
+                with open(SEC_TICKER_CIK_CACHE, 'w') as f:
+                    f.write(r.text)
+            else:
+                print(f'  [SEC] ticker map fetch failed: HTTP {r.status_code}')
+        except Exception as e:
+            print(f'  [SEC] ticker map fetch error: {e}')
+
+    # Load from disk and convert to {TICKER_UPPER: cik_padded_10}
+    mapping = {}
+    try:
+        with open(SEC_TICKER_CIK_CACHE) as f:
+            raw = json.load(f)
+        # SEC format: {"0": {"cik_str": int, "ticker": str, "title": str}, ...}
+        for entry in raw.values():
+            ticker = str(entry.get('ticker', '')).upper().strip()
+            cik    = entry.get('cik_str')
+            if ticker and cik is not None:
+                mapping[ticker] = f'{int(cik):010d}'
+    except Exception as e:
+        print(f'  [SEC] ticker map load failed: {e}')
+
+    _SEC_TICKER_CIK_MAP = mapping
+    if mapping:
+        print(f'  [SEC] Loaded {len(mapping)} ticker→CIK mappings')
+    return mapping
+
+
+def _sec_lookup_cik(symbol: str) -> Optional[str]:
+    """Returns 10-digit zero-padded CIK string or None if ticker unknown."""
+    mapping = _sec_load_ticker_cik_map()
+    return mapping.get(symbol.upper())
+
+
+def _sec_fetch_submissions(symbol: str, cik: str) -> Optional[dict]:
+    """
+    Fetch the submissions JSON for a CIK with short-TTL caching.
+    Returns parsed dict or None on failure.
+    """
+    _sec_init_cache_db()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    conn = sqlite3.connect(SEC_FILINGS_CACHE_DB, timeout=10)
+    try:
+        row = conn.execute(
+            'SELECT fetched_at, response_json FROM submissions_cache WHERE symbol = ?',
+            (symbol.upper(),)
+        ).fetchone()
+        if row:
+            try:
+                age = (datetime.now(timezone.utc) -
+                       datetime.fromisoformat(row[0])).total_seconds()
+                if age < SEC_SUBMISSIONS_TTL:
+                    return json.loads(row[1])
+            except Exception:
+                pass
+    finally:
+        conn.close()
+
+    # Cache miss or stale — fetch fresh
+    url = f'https://data.sec.gov/submissions/CIK{cik}.json'
+    try:
+        r = requests.get(url, headers=SEC_HEADERS, timeout=15)
+        time.sleep(SEC_RATE_DELAY)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+    except Exception as e:
+        print(f'  [SEC] submissions fetch failed for {symbol} (CIK {cik}): {e}')
+        return None
+
+    conn = sqlite3.connect(SEC_FILINGS_CACHE_DB, timeout=10)
+    try:
+        conn.execute('''
+            INSERT OR REPLACE INTO submissions_cache
+            (symbol, cik, fetched_at, response_json)
+            VALUES (?, ?, ?, ?)
+        ''', (symbol.upper(), cik, now_iso, json.dumps(data)))
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+    return data
+
+
+def _sec_parse_form4_xml(xml_text: str) -> tuple:
+    """
+    Parse Form 4 primary_doc.xml. Returns (buy_count, sell_count, all_transactions).
+
+    Counts every transactionCode of P or S across BOTH nonDerivativeTransaction
+    and derivativeTransaction blocks. Codes other than P/S are ignored.
+    """
+    import re
+    # Use regex over XML parsing because Form 4 XML namespaces are
+    # inconsistent across filings (some have default ns, some don't,
+    # some use ownership: prefix). Regex on <transactionCode> is robust.
+    codes = re.findall(
+        r'<transactionCode[^>]*>\s*([A-Z])\s*</transactionCode>',
+        xml_text
+    )
+    buy_count  = sum(1 for c in codes if c in SEC_BUY_CODES)
+    sell_count = sum(1 for c in codes if c in SEC_SELL_CODES)
+    return buy_count, sell_count, codes
+
+
+def _sec_fetch_and_parse_form4(cik: str, accession_no_dashes: str,
+                                symbol: str, filing_date: str) -> Optional[dict]:
+    """
+    Fetch the primary_doc.xml for a Form 4 filing and parse its transactions.
+    Cached permanently by accession_number (filings are immutable once filed).
+
+    Returns {'buy_count': int, 'sell_count': int, 'codes': list} or None.
+    """
+    _sec_init_cache_db()
+    # Check accession-level cache first
+    conn = sqlite3.connect(SEC_FILINGS_CACHE_DB, timeout=10)
+    try:
+        row = conn.execute(
+            'SELECT buy_count, sell_count, transactions_json '
+            'FROM form4_transactions WHERE accession_number = ?',
+            (accession_no_dashes,)
+        ).fetchone()
+        if row:
+            return {
+                'buy_count':  row[0],
+                'sell_count': row[1],
+                'codes':      json.loads(row[2]) if row[2] else [],
+            }
+    finally:
+        conn.close()
+
+    # Cache miss — fetch primary_doc.xml.
+    # SEC filings don't all use the same filename: older filings use
+    # primary_doc.xml, agent-filed Form 4s often use form4.xml, others use
+    # wf-form4_*.xml. We fetch the filing's index.json to find the actual
+    # .xml file, then fetch that.
+    cik_unpadded = str(int(cik))
+    accession_no_dashes_only = accession_no_dashes.replace('-', '')
+    base_url = (f'https://www.sec.gov/Archives/edgar/data/'
+                f'{cik_unpadded}/{accession_no_dashes_only}')
+
+    xml_filename = None
+    try:
+        idx_r = requests.get(f'{base_url}/index.json',
+                              headers=SEC_HEADERS, timeout=15)
+        time.sleep(SEC_RATE_DELAY)
+        if idx_r.status_code != 200:
+            return None
+        items = idx_r.json().get('directory', {}).get('item', [])
+        # Prefer 'form4.xml' or 'primary_doc.xml'; fall back to any .xml that
+        # isn't an XSL transformer (those start with 'xslF' or have 'xsl' in
+        # the name and are SEC's display stylesheets, not the filing data)
+        xml_candidates = [it['name'] for it in items
+                          if isinstance(it, dict) and it.get('name', '').endswith('.xml')
+                          and 'xsl' not in it.get('name', '').lower()]
+        # Prefer known stable names
+        for preferred in ('form4.xml', 'primary_doc.xml'):
+            if preferred in xml_candidates:
+                xml_filename = preferred
+                break
+        if not xml_filename and xml_candidates:
+            xml_filename = xml_candidates[0]
+    except Exception as e:
+        print(f'  [SEC] index.json fetch failed {symbol} {accession_no_dashes}: {e}')
+        return None
+
+    if not xml_filename:
+        return None
+
+    url = f'{base_url}/{xml_filename}'
+
+    try:
+        r = requests.get(url, headers=SEC_HEADERS, timeout=15)
+        time.sleep(SEC_RATE_DELAY)
+        if r.status_code != 200:
+            return None
+        buy, sell, codes = _sec_parse_form4_xml(r.text)
+    except Exception as e:
+        print(f'  [SEC] form4 XML fetch failed {symbol} {accession_no_dashes}: {e}')
+        return None
+
+    # Persist to cache
+    now_iso = datetime.now(timezone.utc).isoformat()
+    conn = sqlite3.connect(SEC_FILINGS_CACHE_DB, timeout=10)
+    try:
+        conn.execute('''
+            INSERT OR REPLACE INTO form4_transactions
+            (accession_number, cik, symbol, filing_date,
+             buy_count, sell_count, transactions_json, parsed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (accession_no_dashes, cik, symbol.upper(), filing_date,
+              buy, sell, json.dumps(codes), now_iso))
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+    return {'buy_count': buy, 'sell_count': sell, 'codes': codes}
+
+
+def _sec_aggregate_recent_form4s(symbol: str, days: int) -> dict:
+    """
+    Core implementation. Looks up CIK, fetches submissions, filters Form 4
+    filings within lookback window, parses each for P/S transaction codes,
+    aggregates results.
+
+    Returns:
+        {
+          'buy_count':     int,   # P transactions across all recent Form 4s
+          'sell_count':    int,   # S transactions
+          'filing_count':  int,   # number of Form 4 filings examined
+          'latest_date':   str,
+          'cik':           str,
+          'error':         str (optional),
+        }
+    """
+    cik = _sec_lookup_cik(symbol)
+    if not cik:
+        return {'buy_count': 0, 'sell_count': 0, 'filing_count': 0,
+                'latest_date': '', 'cik': '', 'error': 'unknown_ticker'}
+
+    subs = _sec_fetch_submissions(symbol, cik)
+    if not subs:
+        return {'buy_count': 0, 'sell_count': 0, 'filing_count': 0,
+                'latest_date': '', 'cik': cik, 'error': 'submissions_fetch_failed'}
+
+    recent = subs.get('filings', {}).get('recent', {})
+    forms        = recent.get('form', [])
+    dates        = recent.get('filingDate', [])
+    accessions   = recent.get('accessionNumber', [])
+
+    cutoff = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+
+    total_buy  = 0
+    total_sell = 0
+    filing_count = 0
+    latest_date  = ''
+    for form, fdate, accession in zip(forms, dates, accessions):
+        if form != '4':
+            continue
+        if fdate < cutoff:
+            # Filings are returned newest first, so we can early-exit
+            break
+        if not latest_date:
+            latest_date = fdate
+        result = _sec_fetch_and_parse_form4(cik, accession, symbol, fdate)
+        if result:
+            total_buy  += result['buy_count']
+            total_sell += result['sell_count']
+            filing_count += 1
+
+    return {
+        'buy_count':    total_buy,
+        'sell_count':   total_sell,
+        'filing_count': filing_count,
+        'latest_date':  latest_date,
+        'cik':          cik,
+    }
+
 
 def get_sec_insider_buys(symbol: str, days: int = 14) -> list:
     """
-    Fetches recent insider buying from SEC EDGAR full-text search.
-    Filters for Form 4 filings (insider transactions) with buy transactions.
-    Free, no API key required.
-    Returns list of buy transactions with date, insider name, shares, value.
+    Returns a list of recent insider PURCHASE transactions for a ticker.
+    Real-money buys only (transaction code P). Grants, exercises, gifts excluded.
+
+    Each item: {'symbol', 'filed', 'cik', 'accession'}
+
+    Used by score_sec_insider() to compute the 0-1 signal score.
     """
     try:
-        # EDGAR full-text search for Form 4 filings
-        url = 'https://efts.sec.gov/LATEST/search-index'
-        params = {
-            'q':        f'"{symbol}"',
-            'dateRange': 'custom',
-            'startdt':  (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d'),
-            'enddt':    datetime.now().strftime('%Y-%m-%d'),
-            'forms':    '4',
-        }
-        headers = {'User-Agent': 'trading-bot contact@example.com'}
-        r = requests.get(url, params=params, headers=headers, timeout=10)
-        if r.status_code != 200:
+        result = _sec_aggregate_recent_form4s(symbol, days)
+        if result.get('error'):
             return []
-
-        hits = r.json().get('hits', {}).get('hits', [])
-        buys = []
-        for hit in hits[:10]:
-            src = hit.get('_source', {})
-            # Only include buys — transaction code 'P' = Purchase
-            # Check transaction_code field, NOT period_of_report (which is a date string)
-            tx_code = str(src.get('transaction_code', '')).upper()
-            # If transaction_code not available, check form text for purchase indicators
-            snippet = str(src).lower()
-            is_buy = (tx_code == 'P' or
-                      (not tx_code and any(w in snippet
-                       for w in ['purchase', 'acquired', 'acquisition'])))
-            if not is_buy:
-                continue
-            display = src.get('display_date_filed', src.get('file_date', ''))
-            entity  = src.get('entity_name', src.get('display_names', [''])[0]
-                              if src.get('display_names') else '')
-            buys.append({
+        # Reconstruct individual buys from the cache for return shape compatibility
+        if result['buy_count'] == 0:
+            return []
+        # Pull the underlying rows from the per-accession cache for this ticker/date
+        conn = sqlite3.connect(SEC_FILINGS_CACHE_DB, timeout=10)
+        try:
+            cutoff = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+            rows = conn.execute('''
+                SELECT accession_number, filing_date, buy_count
+                FROM form4_transactions
+                WHERE symbol = ? AND filing_date >= ? AND buy_count > 0
+                ORDER BY filing_date DESC
+            ''', (symbol.upper(), cutoff)).fetchall()
+        finally:
+            conn.close()
+        return [
+            {
                 'symbol':    symbol,
-                'filed':     display,
-                'insider':   entity,
-                'form':      src.get('form_type', '4'),
-                'accession': src.get('accession_no', ''),
-            })
-        return buys
+                'filed':     row[1],
+                'cik':       result['cik'],
+                'accession': row[0],
+                'buy_count': row[2],
+            }
+            for row in rows
+        ]
     except Exception as e:
         print(f"  [!] SEC EDGAR error for {symbol}: {e}")
         return []
@@ -683,17 +1041,22 @@ def get_sec_insider_buys(symbol: str, days: int = 14) -> list:
 
 def score_sec_insider(symbol: str, days: int = 14) -> float:
     """
-    Returns insider buying score 0-1 based on SEC Form 4 filings.
-    Multiple recent filings = higher score.
+    Returns insider buying score 0-1 based on SEC Form 4 PURCHASE transactions.
+    Higher count = higher score.
+
+    Note: rewards purchase transactions specifically (code P), not raw filing
+    count. A single Form 4 with 3 separate purchase rows counts as 3.
     """
-    buys = get_sec_insider_buys(symbol, days)
-    if not buys:
+    try:
+        result = _sec_aggregate_recent_form4s(symbol, days)
+        buys = result.get('buy_count', 0)
+        if buys >= 3:   return 1.0
+        elif buys == 2: return 0.60
+        elif buys == 1: return 0.30
         return 0.0
-    # Score based on number of recent insider buy filings
-    if len(buys) >= 3:   return 1.0
-    elif len(buys) == 2: return 0.60
-    elif len(buys) == 1: return 0.30
-    return 0.0
+    except Exception as e:
+        print(f"  [!] score_sec_insider error for {symbol}: {e}")
+        return 0.0
 
 
 # ── Reddit WSB Sentiment ──────────────────────────────────────────────────────
@@ -803,60 +1166,34 @@ def get_dp_thresholds_bulk(client, symbols: list) -> dict:
 
 def get_sec_form4(symbol: str, days: int = 30) -> dict:
     """
-    Fetches real insider buying from SEC EDGAR full-text search.
-    Looks for Form 4 filings with Purchase (P) transaction codes.
-    Free, no API key required.
+    Returns aggregated Form 4 insider activity for a ticker, with buy/sell
+    distinction from parsed transaction codes.
+
+    Net signal logic (mirrors prior behavior, now backed by real data):
+      net = buys - sells   (P transactions minus S transactions)
+      net >= 3   →  'strong_buy', score=1.00
+      net == 2   →  'buy',        score=0.75
+      net == 1   →  'buy',        score=0.50
+      net == 0   →  'neutral',    score=0.25
+      net <  0   →  'sell',       score=0.00
 
     Returns:
         {
-          'buy_count':    int,    # number of insider buy filings
-          'sell_count':   int,    # number of insider sell filings
-          'net_signal':   str,    # 'strong_buy' | 'buy' | 'neutral' | 'sell'
-          'score':        float,  # 0.0 - 1.0
+          'buy_count':    int,
+          'sell_count':   int,
+          'net_signal':   str,
+          'score':        float,
+          'filing_count': int,
           'latest_date':  str,
-          'insiders':     list,   # names of buyers
+          'cik':          str,
         }
     """
     try:
-        from datetime import datetime, timedelta
-        start_dt = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
-        end_dt   = datetime.now().strftime('%Y-%m-%d')
-
-        url = 'https://efts.sec.gov/LATEST/search-index'
-        params = {
-            'q':        f'"{symbol}"',
-            'dateRange': 'custom',
-            'startdt':  start_dt,
-            'enddt':    end_dt,
-            'forms':    '4',
-        }
-        headers = {'User-Agent': 'trading-bot research@example.com'}
-        r = requests.get(url, params=params, headers=headers, timeout=10)
-
-        if r.status_code != 200:
-            return {'score': 0.0, 'net_signal': 'neutral', 'buy_count': 0, 'sell_count': 0}
-
-        hits     = r.json().get('hits', {}).get('hits', [])
-        buys     = 0
-        sells    = 0
-        insiders = []
-
-        for hit in hits[:20]:
-            src   = hit.get('_source', {})
-            # Use file_date (when filing became public) not period_of_report (trade date)
-            # File date = public disclosure date; period_of_report = private trade date
-            filed = src.get('file_date', src.get('period_of_report', ''))
-            name  = src.get('display_names', [''])[0] if src.get('display_names') else ''
-
-            # Heuristic: check for buy/sell indicators in filing text
-            snippet = str(src).lower()
-            if any(w in snippet for w in ['purchase', 'acquired', 'bought']):
-                buys += 1
-                if name: insiders.append(name)
-            elif any(w in snippet for w in ['sale', 'sold', 'disposed']):
-                sells += 1
-
+        result = _sec_aggregate_recent_form4s(symbol, days)
+        buys  = result.get('buy_count', 0)
+        sells = result.get('sell_count', 0)
         net = buys - sells
+
         if net >= 3:   signal, score = 'strong_buy', 1.00
         elif net == 2: signal, score = 'buy',        0.75
         elif net == 1: signal, score = 'buy',        0.50
@@ -864,16 +1201,17 @@ def get_sec_form4(symbol: str, days: int = 30) -> dict:
         else:          signal, score = 'sell',       0.00
 
         return {
-            'score':      score,
-            'net_signal': signal,
-            'buy_count':  buys,
-            'sell_count': sells,
-            'insiders':   insiders[:3],
+            'score':        score,
+            'net_signal':   signal,
+            'buy_count':    buys,
+            'sell_count':   sells,
+            'filing_count': result.get('filing_count', 0),
+            'latest_date':  result.get('latest_date', ''),
+            'cik':          result.get('cik', ''),
         }
-
     except Exception as e:
         return {'score': 0.0, 'net_signal': 'neutral', 'buy_count': 0,
-                'sell_count': 0, 'error': str(e)}
+                'sell_count': 0, 'filing_count': 0, 'error': str(e)}
 
 
 # ── Reddit WSB Sentiment ──────────────────────────────────────────────────────
@@ -1149,8 +1487,8 @@ def get_earnings_surprise_tickers(days_back: int = 5,
         seen    = set()
         from datetime import datetime as _dt, timedelta as _td
 
-        for days_back in range(0, days_back + 1):
-            date_str = (_dt.now() - _td(days=days_back)).strftime('%Y-%m-%d')
+        for day_offset in range(0, days_back + 1):
+            date_str = (_dt.now() - _td(days=day_offset)).strftime('%Y-%m-%d')
             try:
                 url = f'{UW_BASE_URL}/earnings/afterhours'
                 r   = requests.get(url, headers=headers,
@@ -1165,6 +1503,7 @@ def get_earnings_surprise_tickers(days_back: int = 5,
                     eps_est    = item.get('street_mean_est')
                     eps_actual = item.get('actual_eps')
                     report_date = item.get('report_date', date_str)
+                    sector     = item.get('sector', '')
 
                     if eps_est is None or eps_actual is None:
                         continue
@@ -1361,7 +1700,7 @@ def get_wsb_tickers(min_mentions: int = 10,
         # Extract tickers (simple heuristic: 2-5 uppercase letters in title)
         import re
         ticker_mentions = {}
-        pattern = re.compile(r'([A-Z]{2,5})')
+        pattern = re.compile(r'([A-Z]{2,5})')
         SKIP = {'WSB', 'DD', 'YOLO', 'ATH', 'CEO', 'SEC', 'FDA', 'IPO',
                 'ETF', 'FED', 'GDP', 'CPI', 'EPS', 'USA', 'USD', 'EUR',
                 'THE', 'FOR', 'ARE', 'NOT', 'BUT', 'YOU', 'CAN', 'HAS'}

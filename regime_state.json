@@ -1,0 +1,14 @@
+{
+  "regime": "neutral",
+  "vixy": 25.43,
+  "vixy_30d_avg": 27.3829,
+  "position_size": 0.5,
+  "in_pause": false,
+  "previous_regime": "neutral",
+  "updated_at": "2026-05-25T23:00:16.498848",
+  "term_signal": "flat",
+  "halt_entries": false,
+  "macro_score": 0.0,
+  "macro_warning": "green",
+  "macro_override": false
+}

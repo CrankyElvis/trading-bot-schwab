@@ -29,6 +29,13 @@ from dataclasses import dataclass, asdict
 
 STATE_FILE = 'regime_state.json'
 
+# ── Mean-reversion thresholds ────────────────────────────────────────────────
+# VIX has "spiked" when its z-score relative to the 30-day rolling distribution
+# exceeds ~1.5 std deviations (top ~7% of recent history). Combined with a
+# term-structure flip to backwardation/inversion, this is a high-probability
+# mean-reversion setup historically.
+MEAN_REVERSION_ZSCORE_THRESHOLD = 1.5
+
 
 @dataclass
 class RegimeState:
@@ -44,6 +51,9 @@ class RegimeState:
     macro_score: float = 0.0   # macro sentinel composite score 0.0-1.0
     macro_warning: str = 'green'  # 'green' | 'yellow' | 'red'
     macro_override: bool = False  # True if macro upgraded the regime
+    vixy_30d_std: float = 0.0     # 30-day rolling std dev of VIXY closes
+    vix_zscore: float = 0.0       # (vixy - 30d_avg) / 30d_std, capped at ±5
+    mean_reversion_signal: bool = False  # True when vol-spike + backwardation align
 
 
 # ── Core Logic ───────────────────────────────────────────────────────────────
@@ -111,6 +121,51 @@ def compute_vixy_30d_avg(vix_history_df) -> float:
     return round(float(closes.mean()), 4)
 
 
+def compute_vixy_30d_std(vix_history_df) -> float:
+    """
+    Computes the 30-day rolling standard deviation of VIXY closes.
+    Used to compute vix_zscore for mean-reversion entry signals.
+    Returns 0.0 if insufficient data.
+    """
+    if vix_history_df is None or vix_history_df.empty:
+        return 0.0
+    col = 'vix' if 'vix' in vix_history_df.columns else vix_history_df.columns[-1]
+    closes = vix_history_df[col].dropna()
+    if len(closes) < 5:
+        return 0.0
+    # Use sample std (ddof=1) — we're treating the 30d window as a sample
+    # of recent vol behavior, not the full population.
+    return round(float(closes.std(ddof=1)), 4)
+
+
+def compute_vix_zscore(vixy: float, mean: float, std: float) -> float:
+    """
+    Returns the z-score of current VIXY vs its 30-day distribution.
+    Capped at ±5 to prevent absurd values when std is tiny.
+    """
+    if std <= 0:
+        return 0.0
+    z = (vixy - mean) / std
+    # Cap at ±5 — beyond this, the std is effectively meaningless
+    return round(max(-5.0, min(5.0, z)), 3)
+
+
+def detect_mean_reversion_signal(vix_zscore: float, term_signal: str) -> bool:
+    """
+    True when conditions align for a high-probability VIX mean-reversion trade:
+      - VIX has spiked at least MEAN_REVERSION_ZSCORE_THRESHOLD std devs above mean
+      - Term structure has flipped to backwardation or inversion (fear)
+
+    Used by options_manager.evaluate_vix_mean_reversion() to decide whether
+    to buy SPY calls anticipating a snapback rally.
+    """
+    if vix_zscore < MEAN_REVERSION_ZSCORE_THRESHOLD:
+        return False
+    if term_signal not in ('backwardation', 'inversion'):
+        return False
+    return True
+
+
 # ── State Persistence ────────────────────────────────────────────────────────
 
 def _load_previous_state() -> dict:
@@ -145,6 +200,7 @@ def evaluate_regime(vixy: float, vix_history_df,
         RegimeState dataclass with all fields populated.
     """
     vixy_30d_avg = compute_vixy_30d_avg(vix_history_df)
+    vixy_30d_std = compute_vixy_30d_std(vix_history_df)
 
     # Fall back to neutral with reduced sizing if we have no history
     if vixy_30d_avg == 0.0:
@@ -192,6 +248,11 @@ def evaluate_regime(vixy: float, vix_history_df,
     ts_signal    = term_structure.get('signal', 'flat') if term_structure else 'flat'
     halt_entries = term_structure.get('halt_entries', False) if term_structure else False
 
+    # VIX z-score + mean-reversion signal (consumed by options_manager
+    # evaluate_vix_mean_reversion and evaluate_iron_condor in volatility regimes)
+    vix_zscore             = compute_vix_zscore(vixy, vixy_30d_avg, vixy_30d_std)
+    mean_reversion_signal  = detect_mean_reversion_signal(vix_zscore, ts_signal)
+
     state = RegimeState(
         regime=new_regime,
         vixy=round(vixy, 4),
@@ -202,6 +263,9 @@ def evaluate_regime(vixy: float, vix_history_df,
         updated_at=datetime.now().isoformat(),
         term_signal=ts_signal,
         halt_entries=halt_entries,
+        vixy_30d_std=vixy_30d_std,
+        vix_zscore=vix_zscore,
+        mean_reversion_signal=mean_reversion_signal,
     )
 
 
@@ -235,6 +299,9 @@ def print_regime_summary(state: RegimeState):
     print(f"  {icon} Regime:        {state.regime.upper()}")
     print(f"  VIXY:           {state.vixy:.2f}")
     print(f"  VIXY 30d avg:   {state.vixy_30d_avg:.2f}")
+    print(f"  VIXY 30d std:   {state.vixy_30d_std:.2f}")
+    print(f"  VIX z-score:    {state.vix_zscore:+.2f}{'  📈 SPIKE' if state.vix_zscore >= 1.5 else ''}")
+    print(f"  Mean-rev sig:   {'TRUE' if state.mean_reversion_signal else 'false'}")
     print(f"  Position size:  {int(state.position_size * 100)}% of max")
     print(f"  Term structure: {state.term_signal.upper()}{'  🛑 HALT ENTRIES' if state.halt_entries else ''}")
     if state.in_pause:
